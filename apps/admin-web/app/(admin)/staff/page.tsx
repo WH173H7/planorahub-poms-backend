@@ -13,6 +13,8 @@ import {
   useState,
 } from 'react';
 
+import { useRouter } from 'next/navigation';
+
 import { apiFetch } from '@/lib/api';
 
 type Staff = {
@@ -83,6 +85,8 @@ type DirectoryResponse<T> = {
 };
 
 export default function StaffPage() {
+  const router = useRouter();
+
   const [staff, setStaff] =
     useState<Staff[]>([]);
 
@@ -369,7 +373,10 @@ export default function StaffPage() {
                   (member) => (
                     <tr
                       key={member.id}
-                      className="transition hover:bg-[#fdfbfd]"
+                      onClick={() =>
+                        router.push(`/staff/${member.id}`)
+                      }
+                      className="cursor-pointer transition hover:bg-[#f8f3f9]"
                     >
                       <td className="px-5 py-4">
                         <div className="flex items-center gap-3">
@@ -1175,17 +1182,16 @@ function CreateStaffDrawer({
                                         }),
                                       )
                                     }
-                                    aria-label={`Access override for ${permission.name}`}
-                                    className="h-9 w-[116px] shrink-0 rounded-lg border border-[#ddd3df] bg-white px-3 text-xs font-semibold text-[#4f4550] shadow-sm outline-none transition hover:border-[#bba9be] focus:border-[#765078] focus:ring-4 focus:ring-[#f4eff6]"
+                                    className="rounded-lg border border-[#e3dae4] bg-white px-3 py-2 text-xs"
                                   >
                                     <option value="DEFAULT">
                                       Default
                                     </option>
                                     <option value="ALLOW">
-                                      Allow
+                                      Allow for this staff member
                                     </option>
                                     <option value="DENY">
-                                      Deny
+                                      Deny for this staff member
                                     </option>
                                   </select>
                                 </div>

@@ -13,6 +13,7 @@ import {
   BriefcaseBusiness,
   Building2,
   ClipboardCheck,
+  ContactRound,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -25,6 +26,7 @@ import {
 import {
   ReactNode,
   useEffect,
+  useMemo,
   useState,
 } from 'react';
 
@@ -33,83 +35,114 @@ import { supabase } from '@/lib/supabase/client';
 
 type MeResponse = {
   success: boolean;
-
   data: {
     id: string;
-
     first_name: string;
     last_name: string;
-
     email: string;
-
     job_title: string | null;
-
     role_id: string;
     role_code: string;
     role_name: string;
-
     department_id: string | null;
     department_name: string | null;
-
     status: string;
-
     permissions: string[];
   };
 };
 
-const navigation = [
-  {
-    label: 'Overview',
-    href: '/dashboard',
-    icon: LayoutDashboard,
-  },
+type NavigationItem = {
+  label: string;
+  href: string;
+  icon: React.ComponentType<{
+    size?: number;
+    strokeWidth?: number;
+  }>;
+  permission?: string;
+};
 
-  {
-    label: 'Staff',
-    href: '/staff',
-    icon: Users,
-  },
+type NavigationGroup = {
+  label: string;
+  items: NavigationItem[];
+};
 
+const navigationGroups: NavigationGroup[] = [
   {
-    label: 'Tasks',
-    href: '/tasks',
-    icon: ClipboardCheck,
+    label: 'Workspace',
+    items: [
+      {
+        label: 'Overview',
+        href: '/dashboard',
+        icon: LayoutDashboard,
+      },
+    ],
   },
-
   {
-    label: 'Leads',
-    href: '/leads',
-    icon: BriefcaseBusiness,
+    label: 'Work',
+    items: [
+      {
+        label: 'Tasks',
+        href: '/tasks',
+        icon: ClipboardCheck,
+      },
+      {
+        label: 'Activities',
+        href: '/activities',
+        icon: Activity,
+      },
+    ],
   },
-
   {
-    label: 'Customers',
-    href: '/customers',
-    icon: Building2,
+    label: 'CRM',
+    items: [
+      {
+        label: 'Organizations',
+        href: '/organizations',
+        icon: Building2,
+        permission: 'organizations.read.all',
+      },
+      {
+        label: 'Contacts',
+        href: '/contacts',
+        icon: ContactRound,
+      },
+      {
+        label: 'Leads',
+        href: '/leads',
+        icon: BriefcaseBusiness,
+      },
+    ],
   },
-
   {
-    label: 'Activities',
-    href: '/activities',
-    icon: Activity,
+    label: 'Insights',
+    items: [
+      {
+        label: 'Analytics',
+        href: '/analytics',
+        icon: BarChart3,
+      },
+      {
+        label: 'Audit Logs',
+        href: '/audit',
+        icon: ShieldCheck,
+      },
+    ],
   },
-
   {
-    label: 'Analytics',
-    href: '/analytics',
-    icon: BarChart3,
-  },
-
-  {
-    label: 'Audit Logs',
-    href: '/audit',
-    icon: ShieldCheck,
-  },
-
-  {
-    label: 'Settings',
-    href: '/settings',
-    icon: Settings,
+    label: 'Administration',
+    items: [
+      {
+        label: 'Staff',
+        href: '/staff',
+        icon: Users,
+        permission: 'users.read.all',
+      },
+      {
+        label: 'Settings',
+        href: '/settings',
+        icon: Settings,
+      },
+    ],
   },
 ];
 
@@ -125,13 +158,10 @@ export function AdminShell({
     useState<MeResponse['data'] | null>(
       null,
     );
-
   const [loading, setLoading] =
     useState(true);
-
   const [error, setError] =
     useState<string | null>(null);
-
   const [mobileMenuOpen, setMobileMenuOpen] =
     useState(false);
 
@@ -154,10 +184,10 @@ export function AdminShell({
           );
 
         setProfile(response.data);
-      } catch (error) {
+      } catch (caught) {
         setError(
-          error instanceof Error
-            ? error.message
+          caught instanceof Error
+            ? caught.message
             : 'Unable to load your Planorahub profile.',
         );
       } finally {
@@ -168,11 +198,42 @@ export function AdminShell({
     void initialise();
   }, [router]);
 
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [pathname]);
+
   async function logout() {
     await supabase.auth.signOut();
-
     window.location.replace('/login');
   }
+
+  const visibleNavigation = useMemo(() => {
+    if (!profile) return navigationGroups;
+
+    const permissions =
+      new Set(profile.permissions ?? []);
+
+    if (
+      profile.role_code === 'SUPER_ADMIN'
+    ) {
+      return navigationGroups;
+    }
+
+    return navigationGroups
+      .map((group) => ({
+        ...group,
+        items: group.items.filter(
+          (item) =>
+            !item.permission ||
+            permissions.has(
+              item.permission,
+            ),
+        ),
+      }))
+      .filter(
+        (group) => group.items.length > 0,
+      );
+  }, [profile]);
 
   if (loading) {
     return (
@@ -226,16 +287,14 @@ export function AdminShell({
 
   return (
     <div className="min-h-screen bg-[#fbfafb] text-[#231d24]">
-
-      {/* DESKTOP SIDEBAR */}
       <aside className="fixed inset-y-0 left-0 z-40 hidden w-[250px] border-r border-[#ebe4ec] bg-white lg:block">
         <SidebarContent
           pathname={pathname}
+          groups={visibleNavigation}
           onNavigate={() => undefined}
         />
       </aside>
 
-      {/* MOBILE OVERLAY */}
       {mobileMenuOpen ? (
         <div className="fixed inset-0 z-50 lg:hidden">
           <button
@@ -247,19 +306,21 @@ export function AdminShell({
             className="absolute inset-0 bg-black/20"
           />
 
-          <aside className="relative h-full w-[270px] bg-white shadow-xl">
+          <aside className="relative h-full w-[280px] overflow-y-auto bg-white shadow-xl">
             <button
               type="button"
               onClick={() =>
                 setMobileMenuOpen(false)
               }
               className="absolute right-4 top-4 rounded-lg p-2 text-[#726874]"
+              aria-label="Close menu"
             >
               <X size={20} />
             </button>
 
             <SidebarContent
               pathname={pathname}
+              groups={visibleNavigation}
               onNavigate={() =>
                 setMobileMenuOpen(false)
               }
@@ -269,9 +330,7 @@ export function AdminShell({
       ) : null}
 
       <div className="lg:pl-[250px]">
-
-        {/* TOP HEADER */}
-        <header className="sticky top-0 z-30 flex h-[76px] items-center justify-between border-b border-[#ebe4ec] bg-white px-5 md:px-8">
+        <header className="sticky top-0 z-30 flex h-[76px] items-center justify-between border-b border-[#ebe4ec] bg-white/95 px-5 backdrop-blur md:px-8">
           <div className="flex items-center gap-3">
             <button
               type="button"
@@ -279,6 +338,7 @@ export function AdminShell({
                 setMobileMenuOpen(true)
               }
               className="rounded-lg border border-[#e7dde9] p-2 text-[#5f5560] lg:hidden"
+              aria-label="Open navigation"
             >
               <Menu size={19} />
             </button>
@@ -306,9 +366,13 @@ export function AdminShell({
               </p>
             </div>
 
-            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#f1eaf3] text-sm font-bold uppercase text-[#36133b]">
+            <Link
+              href={`/staff/${profile.id}`}
+              className="flex h-10 w-10 items-center justify-center rounded-full bg-[#f1eaf3] text-sm font-bold uppercase text-[#36133b] transition hover:ring-4 hover:ring-[#f4eff6]"
+              title="My profile"
+            >
               {initials}
-            </div>
+            </Link>
 
             <button
               type="button"
@@ -331,9 +395,11 @@ export function AdminShell({
 
 function SidebarContent({
   pathname,
+  groups,
   onNavigate,
 }: {
   pathname: string;
+  groups: NavigationGroup[];
   onNavigate: () => void;
 }) {
   return (
@@ -349,43 +415,47 @@ function SidebarContent({
         />
       </div>
 
-      <div className="px-3 py-5">
-        <p className="mb-3 px-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#9a909b]">
-          Workspace
-        </p>
+      <div className="space-y-5 px-3 py-5">
+        {groups.map((group) => (
+          <div key={group.label}>
+            <p className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#a095a1]">
+              {group.label}
+            </p>
 
-        <nav className="space-y-1">
-          {navigation.map((item) => {
-            const active =
-              pathname === item.href ||
-              pathname.startsWith(
-                `${item.href}/`,
-              );
+            <nav className="space-y-1">
+              {group.items.map((item) => {
+                const active =
+                  pathname === item.href ||
+                  pathname.startsWith(
+                    `${item.href}/`,
+                  );
 
-            const Icon = item.icon;
+                const Icon = item.icon;
 
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                onClick={onNavigate}
-                className={[
-                  'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition',
-                  active
-                    ? 'bg-[#f4eff6] text-[#36133b]'
-                    : 'text-[#675f68] hover:bg-[#faf7fb] hover:text-[#36133b]',
-                ].join(' ')}
-              >
-                <Icon
-                  size={18}
-                  strokeWidth={1.8}
-                />
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    onClick={onNavigate}
+                    className={[
+                      'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition',
+                      active
+                        ? 'bg-[#f4eff6] text-[#36133b]'
+                        : 'text-[#675f68] hover:bg-[#faf7fb] hover:text-[#36133b]',
+                    ].join(' ')}
+                  >
+                    <Icon
+                      size={18}
+                      strokeWidth={1.8}
+                    />
 
-                {item.label}
-              </Link>
-            );
-          })}
-        </nav>
+                    {item.label}
+                  </Link>
+                );
+              })}
+            </nav>
+          </div>
+        ))}
       </div>
     </>
   );
