@@ -1,0 +1,3 @@
+import type { ButtonHTMLAttributes,ReactNode } from 'react';
+type Variant='primary'|'secondary'|'outline'|'ghost'|'danger';type Size='sm'|'md'|'lg';
+export function Button({variant='primary',size='md',iconOnly=false,loading=false,className='',children,disabled,...props}:ButtonHTMLAttributes<HTMLButtonElement>&{variant?:Variant;size?:Size;iconOnly?:boolean;loading?:boolean;children:ReactNode}){return <button className={`ui-button ui-button--${variant} ui-button--${size} ${iconOnly?'ui-button--icon':''} ${className}`} disabled={disabled||loading} aria-busy={loading||undefined} {...props}>{loading?<span aria-hidden="true">•••</span>:children}</button>}

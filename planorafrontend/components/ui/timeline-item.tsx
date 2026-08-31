@@ -1,0 +1,1 @@
+import type { ReactNode } from 'react';export function TimelineItem({title,description,meta}:{title:string;description?:ReactNode;meta?:string}){return <div className="timeline-item"><span className="timeline-dot"/><div><strong>{title}</strong>{description?<div className="muted">{description}</div>:null}{meta?<small className="muted">{meta}</small>:null}</div></div>}

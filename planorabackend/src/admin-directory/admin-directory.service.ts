@@ -1,0 +1,751 @@
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+
+import { DatabaseService } from '../database/database.service.js';
+
+type DepartmentInput = {
+  name?: string;
+  description?: string;
+  roleIds?: string[];
+};
+
+type TeamInput = {
+  name?: string;
+  description?: string;
+  departmentId?: string;
+  managerId?: string | null;
+};
+
+@Injectable()
+export class AdminDirectoryService {
+  constructor(
+    private readonly db: DatabaseService,
+  ) {}
+
+  async getRoles() {
+    const result = await this.db.query(
+      `
+      SELECT
+        r.id,
+        r.code,
+        r.name,
+        r.description,
+        r.is_system_role,
+
+        COALESCE(
+          (
+            SELECT ARRAY_AGG(
+              rd.department_id
+              ORDER BY rd.department_id
+            )
+            FROM role_departments rd
+            WHERE rd.role_id = r.id
+          ),
+          ARRAY[]::uuid[]
+        ) AS department_ids,
+
+        COALESCE(
+          (
+            SELECT JSONB_AGG(
+              JSONB_BUILD_OBJECT(
+                'id', p.id,
+                'code', p.code,
+                'name', p.name,
+                'module', p.module,
+                'description', p.description
+              )
+              ORDER BY p.module, p.name
+            )
+            FROM role_permissions rp
+            JOIN permissions p
+              ON p.id = rp.permission_id
+            WHERE rp.role_id = r.id
+          ),
+          '[]'::jsonb
+        ) AS permissions
+
+      FROM roles r
+      ORDER BY r.name ASC
+      `,
+    );
+
+    return result.rows;
+  }
+
+  async getPermissions() {
+    const result = await this.db.query(
+      `
+      SELECT
+        id,
+        code,
+        name,
+        module,
+        description
+      FROM permissions
+      ORDER BY module ASC, name ASC
+      `,
+    );
+
+    return result.rows;
+  }
+
+  async getDepartments() {
+    const result = await this.db.query(
+      `
+      SELECT
+        d.id,
+        d.name,
+        d.description,
+        d.created_at,
+        d.updated_at,
+
+        (
+          SELECT COUNT(*)::int
+          FROM users u
+          WHERE u.department_id = d.id
+        ) AS staff_count,
+
+        (
+          SELECT COUNT(*)::int
+          FROM teams t
+          WHERE t.department_id = d.id
+        ) AS team_count,
+
+        COALESCE(
+          (
+            SELECT JSONB_AGG(
+              JSONB_BUILD_OBJECT(
+                'id', r.id,
+                'code', r.code,
+                'name', r.name
+              )
+              ORDER BY r.name
+            )
+            FROM role_departments rd
+            JOIN roles r
+              ON r.id = rd.role_id
+            WHERE rd.department_id = d.id
+          ),
+          '[]'::jsonb
+        ) AS roles
+
+      FROM departments d
+      ORDER BY d.name ASC
+      `,
+    );
+
+    return result.rows;
+  }
+
+  private async validateRoleIds(
+    roleIds: string[],
+  ) {
+    if (roleIds.length === 0) {
+      return;
+    }
+
+    const result = await this.db.query<{
+      id: string;
+    }>(
+      `
+      SELECT id
+      FROM roles
+      WHERE id = ANY($1::uuid[])
+      `,
+      [roleIds],
+    );
+
+    if (result.rows.length !== roleIds.length) {
+      throw new BadRequestException(
+        'One or more selected roles are invalid',
+      );
+    }
+  }
+
+  private async syncDepartmentRoles(
+    departmentId: string,
+    roleIds: string[],
+  ) {
+    const uniqueRoleIds = [
+      ...new Set(roleIds),
+    ];
+
+    await this.validateRoleIds(
+      uniqueRoleIds,
+    );
+
+    await this.db.query(
+      `
+      DELETE FROM role_departments
+      WHERE department_id = $1
+      `,
+      [departmentId],
+    );
+
+    if (uniqueRoleIds.length === 0) {
+      return;
+    }
+
+    await this.db.query(
+      `
+      INSERT INTO role_departments (
+        role_id,
+        department_id
+      )
+      SELECT
+        role_id,
+        $1::uuid
+      FROM UNNEST($2::uuid[])
+        AS role_id
+      ON CONFLICT DO NOTHING
+      `,
+      [
+        departmentId,
+        uniqueRoleIds,
+      ],
+    );
+  }
+
+  async createDepartment(
+    params: DepartmentInput,
+  ) {
+    const name = params.name?.trim();
+
+    if (!name) {
+      throw new BadRequestException(
+        'Department name is required',
+      );
+    }
+
+    const existing = await this.db.query(
+      `
+      SELECT id
+      FROM departments
+      WHERE LOWER(name) = LOWER($1)
+      LIMIT 1
+      `,
+      [name],
+    );
+
+    if (existing.rowCount) {
+      throw new ConflictException(
+        'A department with this name already exists',
+      );
+    }
+
+    const result = await this.db.query<{
+      id: string;
+      name: string;
+      description: string | null;
+    }>(
+      `
+      INSERT INTO departments (
+        name,
+        description
+      )
+      VALUES ($1, $2)
+      RETURNING
+        id,
+        name,
+        description
+      `,
+      [
+        name,
+        params.description?.trim() ||
+          null,
+      ],
+    );
+
+    const department =
+      result.rows[0];
+
+    await this.syncDepartmentRoles(
+      department.id,
+      params.roleIds ?? [],
+    );
+
+    return department;
+  }
+
+  async updateDepartment(
+    id: string,
+    params: DepartmentInput,
+  ) {
+    const existing =
+      await this.db.query<{
+        id: string;
+        name: string;
+      }>(
+        `
+        SELECT id, name
+        FROM departments
+        WHERE id = $1
+        LIMIT 1
+        `,
+        [id],
+      );
+
+    if (!existing.rowCount) {
+      throw new NotFoundException(
+        'Department not found',
+      );
+    }
+
+    if (params.name?.trim()) {
+      const duplicate =
+        await this.db.query(
+          `
+          SELECT id
+          FROM departments
+          WHERE LOWER(name) = LOWER($1)
+            AND id <> $2
+          LIMIT 1
+          `,
+          [
+            params.name.trim(),
+            id,
+          ],
+        );
+
+      if (duplicate.rowCount) {
+        throw new ConflictException(
+          'A department with this name already exists',
+        );
+      }
+    }
+
+    const result =
+      await this.db.query(
+        `
+        UPDATE departments
+        SET
+          name = COALESCE($2, name),
+          description = CASE
+            WHEN $3::boolean = FALSE
+              THEN description
+            ELSE $4
+          END,
+          updated_at = NOW()
+        WHERE id = $1
+        RETURNING *
+        `,
+        [
+          id,
+          params.name?.trim() || null,
+          params.description !== undefined,
+          params.description === undefined
+            ? null
+            : params.description.trim() ||
+              null,
+        ],
+      );
+
+    if (params.roleIds !== undefined) {
+      await this.syncDepartmentRoles(
+        id,
+        params.roleIds,
+      );
+    }
+
+    return result.rows[0];
+  }
+
+  async deleteDepartment(
+    id: string,
+  ) {
+    const dependencies =
+      await this.db.query<{
+        staff_count: number;
+        team_count: number;
+      }>(
+        `
+        SELECT
+          (
+            SELECT COUNT(*)::int
+            FROM users
+            WHERE department_id = $1
+          ) AS staff_count,
+
+          (
+            SELECT COUNT(*)::int
+            FROM teams
+            WHERE department_id = $1
+          ) AS team_count
+        `,
+        [id],
+      );
+
+    const counts =
+      dependencies.rows[0];
+
+    if (
+      counts.staff_count > 0 ||
+      counts.team_count > 0
+    ) {
+      throw new ConflictException(
+        'Department cannot be deleted while it still contains staff or teams',
+      );
+    }
+
+    const result =
+      await this.db.query(
+        `
+        DELETE FROM departments
+        WHERE id = $1
+        RETURNING id
+        `,
+        [id],
+      );
+
+    if (!result.rowCount) {
+      throw new NotFoundException(
+        'Department not found',
+      );
+    }
+
+    return { id };
+  }
+
+  async getTeams() {
+    const result = await this.db.query(
+      `
+      SELECT
+        t.id,
+        t.name,
+        t.description,
+        t.department_id,
+        t.manager_id,
+        t.created_at,
+        t.updated_at,
+
+        d.name AS department_name,
+
+        CASE
+          WHEN u.id IS NULL
+            THEN NULL
+          ELSE CONCAT(
+            u.first_name,
+            ' ',
+            u.last_name
+          )
+        END AS manager_name,
+
+        COUNT(
+          DISTINCT tm.user_id
+        )::int AS member_count
+
+      FROM teams t
+
+      JOIN departments d
+        ON d.id = t.department_id
+
+      LEFT JOIN users u
+        ON u.id = t.manager_id
+
+      LEFT JOIN team_members tm
+        ON tm.team_id = t.id
+
+      GROUP BY
+        t.id,
+        d.id,
+        u.id
+
+      ORDER BY
+        d.name ASC,
+        t.name ASC
+      `,
+    );
+
+    return result.rows;
+  }
+
+  async createTeam(
+    params: TeamInput,
+  ) {
+    const name = params.name?.trim();
+
+    if (!name) {
+      throw new BadRequestException(
+        'Team name is required',
+      );
+    }
+
+    if (!params.departmentId) {
+      throw new BadRequestException(
+        'Department is required',
+      );
+    }
+
+    const department =
+      await this.db.query(
+        `
+        SELECT id
+        FROM departments
+        WHERE id = $1
+        LIMIT 1
+        `,
+        [params.departmentId],
+      );
+
+    if (!department.rowCount) {
+      throw new BadRequestException(
+        'Invalid department',
+      );
+    }
+
+    const duplicate =
+      await this.db.query(
+        `
+        SELECT id
+        FROM teams
+        WHERE department_id = $1
+          AND LOWER(name) =
+            LOWER($2)
+        LIMIT 1
+        `,
+        [
+          params.departmentId,
+          name,
+        ],
+      );
+
+    if (duplicate.rowCount) {
+      throw new ConflictException(
+        'A team with this name already exists in the department',
+      );
+    }
+
+    if (params.managerId) {
+      const manager =
+        await this.db.query(
+          `
+          SELECT id
+          FROM users
+          WHERE id = $1
+          LIMIT 1
+          `,
+          [params.managerId],
+        );
+
+      if (!manager.rowCount) {
+        throw new BadRequestException(
+          'Invalid team manager',
+        );
+      }
+    }
+
+    const result =
+      await this.db.query(
+        `
+        INSERT INTO teams (
+          name,
+          description,
+          department_id,
+          manager_id
+        )
+        VALUES ($1, $2, $3, $4)
+        RETURNING *
+        `,
+        [
+          name,
+          params.description?.trim() ||
+            null,
+          params.departmentId,
+          params.managerId || null,
+        ],
+      );
+
+    return result.rows[0];
+  }
+
+  async updateTeam(
+    id: string,
+    params: TeamInput,
+  ) {
+    const existing =
+      await this.db.query<{
+        id: string;
+        department_id: string;
+      }>(
+        `
+        SELECT
+          id,
+          department_id
+        FROM teams
+        WHERE id = $1
+        LIMIT 1
+        `,
+        [id],
+      );
+
+    if (!existing.rowCount) {
+      throw new NotFoundException(
+        'Team not found',
+      );
+    }
+
+    const departmentId =
+      params.departmentId ??
+      existing.rows[0].department_id;
+
+    if (params.departmentId) {
+      const department =
+        await this.db.query(
+          `
+          SELECT id
+          FROM departments
+          WHERE id = $1
+          LIMIT 1
+          `,
+          [params.departmentId],
+        );
+
+      if (!department.rowCount) {
+        throw new BadRequestException(
+          'Invalid department',
+        );
+      }
+    }
+
+    if (params.name?.trim()) {
+      const duplicate =
+        await this.db.query(
+          `
+          SELECT id
+          FROM teams
+          WHERE department_id = $1
+            AND LOWER(name) =
+              LOWER($2)
+            AND id <> $3
+          LIMIT 1
+          `,
+          [
+            departmentId,
+            params.name.trim(),
+            id,
+          ],
+        );
+
+      if (duplicate.rowCount) {
+        throw new ConflictException(
+          'A team with this name already exists in the department',
+        );
+      }
+    }
+
+    if (params.managerId) {
+      const manager =
+        await this.db.query(
+          `
+          SELECT id
+          FROM users
+          WHERE id = $1
+          LIMIT 1
+          `,
+          [params.managerId],
+        );
+
+      if (!manager.rowCount) {
+        throw new BadRequestException(
+          'Invalid team manager',
+        );
+      }
+    }
+
+    const result =
+      await this.db.query(
+        `
+        UPDATE teams
+        SET
+          name =
+            COALESCE($2, name),
+
+          description = CASE
+            WHEN $3::boolean = FALSE
+              THEN description
+            ELSE $4
+          END,
+
+          department_id =
+            COALESCE(
+              $5::uuid,
+              department_id
+            ),
+
+          manager_id = CASE
+            WHEN $6::boolean = FALSE
+              THEN manager_id
+            ELSE $7::uuid
+          END,
+
+          updated_at = NOW()
+
+        WHERE id = $1
+        RETURNING *
+        `,
+        [
+          id,
+          params.name?.trim() ||
+            null,
+          params.description !== undefined,
+          params.description === undefined
+            ? null
+            : params.description.trim() ||
+              null,
+          params.departmentId || null,
+          params.managerId !== undefined,
+          params.managerId ?? null,
+        ],
+      );
+
+    return result.rows[0];
+  }
+
+  async deleteTeam(
+    id: string,
+  ) {
+    const members =
+      await this.db.query<{
+        count: number;
+      }>(
+        `
+        SELECT COUNT(*)::int AS count
+        FROM team_members
+        WHERE team_id = $1
+        `,
+        [id],
+      );
+
+    if (
+      Number(
+        members.rows[0]?.count ?? 0,
+      ) > 0
+    ) {
+      throw new ConflictException(
+        'Team cannot be deleted while staff members are assigned to it',
+      );
+    }
+
+    const result =
+      await this.db.query(
+        `
+        DELETE FROM teams
+        WHERE id = $1
+        RETURNING id
+        `,
+        [id],
+      );
+
+    if (!result.rowCount) {
+      throw new NotFoundException(
+        'Team not found',
+      );
+    }
+
+    return { id };
+  }
+}

@@ -4,6 +4,12 @@
   "private": true,
   "description": "Planorahub Operations Management System",
   "scripts": {
+    "dev:frontend": "pnpm --filter planorafrontend dev --port 3000",
+    "dev:backend": "pnpm --filter planorabackend start:dev",
+    "build:frontend": "pnpm --filter planorafrontend build",
+    "build:backend": "pnpm --filter planorabackend build",
+    "typecheck:frontend": "pnpm --filter planorafrontend typecheck",
+    "typecheck:backend": "pnpm --filter planorabackend typecheck",
     "dev:admin": "pnpm --filter admin-web dev --port 3000",
     "dev:staff": "pnpm --filter staff-web dev --port 3001",
     "dev:api": "pnpm --filter api start:dev",

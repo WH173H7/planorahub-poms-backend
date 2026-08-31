@@ -1,0 +1,1 @@
+import type { ReactNode } from 'react';export type Tone='neutral'|'success'|'warning'|'danger'|'info'|'purple';export function Badge({children,tone='neutral'}:{children:ReactNode;tone?:Tone}){return <span className={`ui-badge tone-${tone}`}>{children}</span>}

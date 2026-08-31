@@ -1,0 +1,1 @@
+import type { ReactNode } from 'react';export function Tooltip({label,children,disabled=false}:{label:string;children:ReactNode;disabled?:boolean}){return disabled?<>{children}</>:<span className="tooltip">{children}<span className="tooltip-content" role="tooltip">{label}</span></span>}
