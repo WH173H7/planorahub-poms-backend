@@ -95,6 +95,15 @@ export class ActivitiesRepository {
     return result.rows as ActivityRow[];
   }
 
+  async listForLead(leadId: string): Promise<ActivityRow[]> {
+    const result = await this.db.query(`
+      ${this.selectSql()}
+      WHERE a.lead_id = $1
+      ORDER BY COALESCE(a.scheduled_at, a.completed_at, a.created_at) DESC
+    `, [leadId]);
+    return result.rows as ActivityRow[];
+  }
+
   async findById(id: string): Promise<ActivityRow | null> {
     const result = await this.db.query(
       `${this.selectSql()} WHERE a.id = $1 LIMIT 1`,

@@ -26,3 +26,6 @@ temp/
 **/.env
 **/.env.*
 !**/.env.example
+
+# Local development bundles and backups
+zips/

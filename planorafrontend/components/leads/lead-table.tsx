@@ -1,0 +1,11 @@
+import Link from 'next/link';
+import { Progress } from '@/components/ui/progress';
+import { Table } from '@/components/ui/table';
+import { formatDate, organizationLocation, ownerName } from '@/lib/leads/helpers';
+import type { Lead } from '@/lib/leads/types';
+import { LeadPriorityPill, LeadStagePill } from './lead-status';
+
+export function LeadTable({ leads, selected, onToggle, onToggleAll }: { leads: Lead[]; selected: Set<string>; onToggle: (id: string) => void; onToggleAll: () => void }) {
+  const allSelected = leads.length > 0 && leads.every((lead) => selected.has(lead.id));
+  return <div className="lead-table-view"><Table><thead><tr><th className="select-column"><input type="checkbox" aria-label="Select all visible leads" checked={allSelected} onChange={onToggleAll} /></th><th>Organization</th><th>Industry</th><th>Stage</th><th>Owner</th><th>Progress</th><th>Priority</th><th>Created</th><th className="actions-column"><span className="sr-only">Actions</span></th></tr></thead><tbody>{leads.map((lead) => <tr key={lead.id} data-selected={selected.has(lead.id)}><td><input type="checkbox" aria-label={`Select ${lead.organization_name}`} checked={selected.has(lead.id)} onChange={() => onToggle(lead.id)} /></td><td><div className="lead-org"><strong><Link href={`/leads/${lead.id}`}>{lead.organization_name}</Link></strong><span>{lead.organization_website || organizationLocation(lead) || lead.source || 'Organization lead'}</span></div></td><td>{lead.industry || <span className="muted">—</span>}</td><td><LeadStagePill stage={lead.stage} /></td><td><span className={lead.assigned_to_id ? '' : 'unassigned-owner'}>{ownerName(lead)}</span></td><td><div className="lead-progress"><span>{lead.pursuit_progress}%</span><Progress value={lead.pursuit_progress} /></div></td><td><LeadPriorityPill priority={lead.priority} /></td><td>{formatDate(lead.created_at)}</td><td><Link className="row-action" href={`/leads/${lead.id}`} aria-label={`Open workspace for ${lead.organization_name}`}>→</Link></td></tr>)}</tbody></Table></div>;
+}

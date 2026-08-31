@@ -85,3 +85,17 @@ export class ActivitiesController {
     };
   }
 }
+
+@Controller('admin/leads')
+@UseGuards(AuthGuard, PermissionGuard)
+export class LeadActivitiesController {
+  constructor(private readonly activities: ActivitiesService) {}
+
+  @Get(':leadId/activities')
+  // R3 is an admin workspace. A future staff route must enforce staff-scoped
+  // ownership permissions and must not grant unrestricted activities.read.all.
+  @RequirePermission('activities.read.all')
+  async listForLead(@Param('leadId') leadId: string) {
+    return { success: true, data: await this.activities.listForLead(leadId) };
+  }
+}

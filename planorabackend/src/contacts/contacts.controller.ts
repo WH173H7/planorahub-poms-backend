@@ -18,6 +18,7 @@ import {
 import { RequirePermission } from '../auth/require-permission.decorator.js';
 import { PermissionGuard } from '../permissions/permission.guard.js';
 import {
+  type ContactMethodInput,
   type ContactInput,
 } from './contacts.repository.js';
 import { ContactsService } from './contacts.service.js';
@@ -68,6 +69,46 @@ export class ContactsController {
         this.context(request, userAgent),
       ),
     };
+  }
+
+  @Get(':contactId/methods')
+  @RequirePermission('contacts.read.all')
+  async listMethods(@Param('contactId') contactId: string) {
+    return { success: true, data: await this.contacts.listMethods(contactId) };
+  }
+
+  @Post(':contactId/methods')
+  @RequirePermission('contacts.create')
+  async createMethod(
+    @Param('contactId') contactId: string,
+    @Body() body: Partial<ContactMethodInput>,
+    @Req() request: AuthenticatedRequest,
+    @Headers('user-agent') userAgent?: string,
+  ) {
+    return { success: true, data: await this.contacts.createMethod(contactId, body, this.context(request, userAgent)) };
+  }
+
+  @Patch(':contactId/methods/:methodId')
+  @RequirePermission('contacts.update.all')
+  async updateMethod(
+    @Param('contactId') contactId: string,
+    @Param('methodId') methodId: string,
+    @Body() body: Partial<ContactMethodInput>,
+    @Req() request: AuthenticatedRequest,
+    @Headers('user-agent') userAgent?: string,
+  ) {
+    return { success: true, data: await this.contacts.updateMethod(contactId, methodId, body, this.context(request, userAgent)) };
+  }
+
+  @Delete(':contactId/methods/:methodId')
+  @RequirePermission('contacts.delete')
+  async deleteMethod(
+    @Param('contactId') contactId: string,
+    @Param('methodId') methodId: string,
+    @Req() request: AuthenticatedRequest,
+    @Headers('user-agent') userAgent?: string,
+  ) {
+    return { success: true, data: await this.contacts.deleteMethod(contactId, methodId, this.context(request, userAgent)) };
   }
 
   @Patch(':id')

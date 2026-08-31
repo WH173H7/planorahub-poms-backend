@@ -29,6 +29,13 @@ export class ActivitiesService {
     return this.activities.list();
   }
 
+  async listForLead(leadId: string) {
+    if (!(await this.activities.entityExists('leads', leadId))) {
+      throw new NotFoundException('Lead not found');
+    }
+    return this.activities.listForLead(leadId);
+  }
+
   async get(id: string) {
     const activity = await this.activities.findById(id);
     if (!activity) throw new NotFoundException('Activity not found');
