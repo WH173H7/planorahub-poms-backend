@@ -29,11 +29,11 @@ export class UsersService {
     if(await this.usersRepository.findByEmail(email)) throw new ConflictException('A staff account with this email already exists');
     if(!(await this.usersRepository.getRole(dto.roleId))) throw new BadRequestException('Invalid role');
     const departmentId=dto.departmentId??null;
-    if(departmentId && !(await this.usersRepository.departmentExists(departmentId))) throw new BadRequestException('Invalid department');
+    if(!departmentId) throw new BadRequestException('Create/select a department before creating staff');
+    if(!(await this.usersRepository.departmentExists(departmentId))) throw new BadRequestException('Invalid department');
     if(!(await this.usersRepository.roleAllowedInDepartment(dto.roleId,departmentId))) throw new BadRequestException('This role is not available in the selected department');
     const teamIds=[...new Set(dto.teamIds??[])];
     if(!(await this.usersRepository.teamsExist(teamIds))) throw new BadRequestException('One or more teams are invalid');
-    if(!(await this.usersRepository.teamsBelongToDepartment(teamIds,departmentId))) throw new BadRequestException('Selected teams must belong to the selected department');
     const permissionOverrides=dto.permissionOverrides??[];
     await this.validateOverrides(permissionOverrides);
     const temporaryPassword=this.generateTemporaryPassword();
@@ -71,7 +71,6 @@ export class UsersService {
     if(!(await this.usersRepository.roleAllowedInDepartment(roleId,departmentId))) throw new BadRequestException('This role is not available in the selected department');
     const teamIds=input.teamIds===undefined?undefined:[...new Set(input.teamIds)];
     if(teamIds && !(await this.usersRepository.teamsExist(teamIds))) throw new BadRequestException('One or more teams are invalid');
-    if(teamIds && !(await this.usersRepository.teamsBelongToDepartment(teamIds,departmentId))) throw new BadRequestException('Selected teams must belong to the selected department');
     if(input.permissionOverrides) await this.validateOverrides(input.permissionOverrides);
     const oldRole=await this.usersRepository.getRole(current.role_id);
     if(oldRole?.code==='SUPER_ADMIN' && role.code!=='SUPER_ADMIN') await this.protectLastSuperAdmin();

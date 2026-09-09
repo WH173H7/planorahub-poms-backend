@@ -1,2 +1,5 @@
 import type { NavigationSection } from './navigation.types';
-export const staffNavigation:NavigationSection[]=[{label:'Home',items:[{label:'My Day',href:'/home',icon:'dashboard'}]},{label:'My Work',items:[{label:'Assigned Leads',icon:'leads',disabled:true},{label:'Prospects',icon:'prospects',disabled:true},{label:'Tasks',icon:'tasks',disabled:true},{label:'Follow-ups',icon:'followups',disabled:true},{label:'Calendar',icon:'calendar',disabled:true}]},{label:'Communication',items:[{label:'Email',icon:'email',disabled:true}]},{label:'My Performance',items:[{label:'Targets',icon:'targets',disabled:true},{label:'Progress',icon:'analytics',disabled:true}]}];
+export const staffNavigation:NavigationSection[]=[
+{label:'My Work',items:[{label:'My Day',href:'/home',icon:'dashboard'},{label:'Leads',href:'/my-work',icon:'leads'},{label:'Tasks',href:'/tasks',icon:'tasks'},{label:'Follow-ups',href:'/follow-ups',icon:'followups'},{label:'Calendar',href:'/calendar',icon:'calendar'}]},
+{label:'Communication',items:[{label:'Email',href:'/email',icon:'email'},{label:'Official Letters',href:'/letterhead',icon:'reports'},{label:'Shared Files',href:'/shared-files',icon:'templates'}]}
+];

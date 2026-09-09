@@ -6,20 +6,23 @@ async function bootstrap() {
 
   app.setGlobalPrefix('api');
 
+  const allowedOrigins = [
+    'http://localhost:3000',
+    'http://localhost:3001',
+    process.env.FRONTEND_URL,
+  ].filter((origin): origin is string => Boolean(origin));
+
   app.enableCors({
-    origin: [
-      'http://localhost:3000',
-      'http://localhost:3001',
-    ],
+    origin: allowedOrigins,
     credentials: true,
   });
 
   const port = Number(process.env.PORT ?? 4000);
 
-  await app.listen(port);
+  await app.listen(port, '0.0.0.0');
 
   console.log(
-    `Planorahub POMS API running on http://localhost:${port}/api`,
+    `PlanoraHub POMS API running on port ${port}`,
   );
 }
 

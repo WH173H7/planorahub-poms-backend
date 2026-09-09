@@ -1,4 +1,5 @@
 'use client';
+import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AppShell } from '@/components/shell/app-shell';
 import { Button } from '@/components/ui/button';
@@ -9,7 +10,9 @@ import { listLeads } from '@/lib/leads/api';
 import { organizationLocation, ownerName } from '@/lib/leads/helpers';
 import type { Lead } from '@/lib/leads/types';
 import { AddLeadDialog } from './add-lead-dialog';
+import { AssignLeadsDialog } from './assign-leads-dialog';
 import { LeadMobileList } from './lead-mobile-list';
+import { ImportLeadsDialog } from './import-leads-dialog';
 import { LeadSummary } from './lead-summary';
 import { LeadTable } from './lead-table';
 import { type LeadFilters, LeadToolbar } from './lead-toolbar';
@@ -24,6 +27,8 @@ export function LeadPool() {
   const [filters, setFilters] = useState<LeadFilters>(initialFilters);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [addOpen, setAddOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [assignOpen, setAssignOpen] = useState(false);
 
   const load = useCallback(async () => { setLoading(true); setError(null); try { const records = await listLeads(); setLeads(records); setSelected((current) => new Set([...current].filter((id) => records.some((lead) => lead.id === id)))); } catch (caught) { setError(caught instanceof Error ? caught.message : 'Unable to load the Lead Pool.'); } finally { setLoading(false); } }, []);
   useEffect(() => {
@@ -40,9 +45,20 @@ export function LeadPool() {
   function toggleAll() { const all = visible.length > 0 && visible.every((lead) => selected.has(lead.id)); setSelected((current) => { const next = new Set(current); visible.forEach((lead) => all ? next.delete(lead.id) : next.add(lead.id)); return next; }); }
   const filtered = search.trim() || Object.values(filters).some((value) => value !== 'ALL');
 
-  return <AppShell area="admin" title="Leads" breadcrumb="Sales" description="Organizations your team is researching and pursuing." actions={<><Button variant="outline" disabled>Import · Coming Soon</Button><Button onClick={() => setAddOpen(true)}>+ Add Lead</Button></>}>
-    {loading ? <LeadPoolSkeleton /> : error ? <div className="page-section"><PageErrorState message={error} /><Button variant="outline" onClick={() => void load()}>Retry</Button></div> : leads.length === 0 ? <div className="ui-card"><EmptyState icon="leads" title="No leads yet" description="Add an organization your team wants to research and pursue." action={<Button onClick={() => setAddOpen(true)}>+ Add Lead</Button>} /></div> : <><LeadSummary leads={leads} /><LeadToolbar search={search} onSearch={setSearch} filters={filters} onFilters={setFilters} owners={owners} selectedCount={selected.size} onClearSelection={() => setSelected(new Set())} />{visible.length === 0 ? <div className="ui-card"><EmptyState icon="search" title="No matching leads" description="Try changing your search or filters." action={filtered ? <Button variant="outline" onClick={() => { setSearch(''); setFilters(initialFilters); }}>Clear filters</Button> : undefined} /></div> : <><LeadTable leads={visible} selected={selected} onToggle={toggle} onToggleAll={toggleAll} /><LeadMobileList leads={visible} selected={selected} onToggle={toggle} /></>}</>}
+  return <AppShell area="admin" title="Leads" breadcrumb="Sales" description="Organizations your team is researching and pursuing." actions={<><Link href="/lead-workflows"><Button variant="outline">Lead Workflows</Button></Link><Button variant="outline" onClick={() => setImportOpen(true)}>Import Leads</Button><Button onClick={() => setAddOpen(true)}>+ Add Lead</Button></>}>
+    {loading ? <LeadPoolSkeleton /> : error ? <div className="page-section"><PageErrorState message={error} /><Button variant="outline" onClick={() => void load()}>Retry</Button></div> : leads.length === 0 ? <div className="ui-card"><EmptyState icon="leads" title="No leads yet" description="Add an organization your team wants to research and pursue." action={<Button onClick={() => setAddOpen(true)}>+ Add Lead</Button>} /></div> : <><LeadSummary leads={leads} /><LeadToolbar search={search} onSearch={setSearch} filters={filters} onFilters={setFilters} owners={owners} selectedCount={selected.size} onAssignSelected={() => setAssignOpen(true)} onClearSelection={() => setSelected(new Set())} />{visible.length === 0 ? <div className="ui-card"><EmptyState icon="search" title="No matching leads" description="Try changing your search or filters." action={filtered ? <Button variant="outline" onClick={() => { setSearch(''); setFilters(initialFilters); }}>Clear filters</Button> : undefined} /></div> : <><LeadTable leads={visible} selected={selected} onToggle={toggle} onToggleAll={toggleAll} /><LeadMobileList leads={visible} selected={selected} onToggle={toggle} /></>}</>}
+    <ImportLeadsDialog open={importOpen} onClose={() => setImportOpen(false)} onImported={async () => { await load(); }} />
     <AddLeadDialog open={addOpen} onClose={() => setAddOpen(false)} onCreated={async () => { setAddOpen(false); await load(); }} />
+
+    <AssignLeadsDialog
+      open={assignOpen}
+      leads={leads.filter((lead) => selected.has(lead.id))}
+      onClose={() => setAssignOpen(false)}
+      onAssigned={async () => {
+        setSelected(new Set());
+        await load();
+      }}
+    />
   </AppShell>;
 }
 

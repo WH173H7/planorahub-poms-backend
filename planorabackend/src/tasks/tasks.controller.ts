@@ -124,6 +124,18 @@ export class TasksController {
     };
   }
 
+  @Post(':id/review')
+  @RequirePermission('tasks.update.all')
+  async reviewSubmission(@Param('id') id:string,@Body() body:{decision:'APPROVE'|'REVISION';message?:string},@Req() req:AuthenticatedRequest,@Headers('user-agent') ua?:string){
+    return {success:true,data:await this.tasks.reviewSubmission(id,body.decision,body.message,this.ctx(req,ua))};
+  }
+
+  @Post(':id/workflow-steps/:stepId')
+  @RequirePermission('tasks.update.all')
+  async toggleWorkflowStep(@Param('id') id:string,@Param('stepId') stepId:string,@Body() body:{completed:boolean},@Req() req:AuthenticatedRequest,@Headers('user-agent') ua?:string){
+    return {success:true,data:await this.tasks.toggleWorkflowStep(id,stepId,Boolean(body.completed),this.ctx(req,ua))};
+  }
+
   @Delete(':id')
   @RequirePermission('tasks.delete')
   async deleteTask(

@@ -24,7 +24,7 @@ type ActionContext = {
   userAgent?: string;
 };
 
-type UploadedTaskFile = {
+export type UploadedTaskFile = {
   originalname: string;
   mimetype: string;
   size: number;
@@ -32,11 +32,10 @@ type UploadedTaskFile = {
 };
 
 export type TaskDetail = TaskRow & {
-  events: Awaited<
-    ReturnType<TasksRepository['events']>
-  >;
+  events: Awaited<ReturnType<TasksRepository['events']>>;
   attachments: TaskAttachmentRow[];
   lead_assignment_batch: Awaited<ReturnType<TasksRepository['leadAssignmentForTask']>>;
+  task_workflow: Awaited<ReturnType<TasksRepository['workflowForTask']>>;
 };
 
 const TASK_ATTACHMENTS_BUCKET = 'task-attachments';
@@ -63,7 +62,49 @@ export class TasksService {
   ) {}
 
   async list() {
-    return this.tasks.list();
+    const rows = await this.tasks.list();
+    return Promise.all(
+      rows.map(async (task) => ({
+        ...task,
+        lead_assignment_batch: await this.tasks.leadAssignmentForTask(task.id),
+      })),
+    );
+  }
+
+  async listOwned(userId: string) {
+    const rows = await this.tasks.listOwned(userId);
+    return Promise.all(
+      rows.map(async (task) => ({
+        ...task,
+        lead_assignment_batch: await this.tasks.leadAssignmentForTask(task.id),
+      })),
+    );
+  }
+
+  async getOwned(id: string, userId: string) {
+    const task = await this.tasks.findOwnedById(id, userId);
+    if (!task) throw new NotFoundException('Task not found');
+    const [events, attachments, leadAssignmentBatch, taskWorkflow] = await Promise.all([
+      this.tasks.events(id),
+      this.tasks.listAttachments(id),
+      this.tasks.leadAssignmentForTask(id),
+      this.tasks.workflowForTask(id),
+    ]);
+    return { ...task, events, attachments, lead_assignment_batch: leadAssignmentBatch, task_workflow: taskWorkflow };
+  }
+
+  async updateOwned(id:string,body:Partial<TaskInput>,userId:string,context?:ActionContext){
+    await this.getOwned(id,userId);
+    const keys=Object.keys(body).filter((key)=>body[key as keyof TaskInput]!==undefined);
+    if(keys.some((key)=>key!=='status')) throw new BadRequestException('Assigned staff cannot change the task brief, assignee, priority or deadline. Ask an Admin to update the task.');
+    if(body.status && !['TODO','IN_PROGRESS','BLOCKED'].includes(body.status)) throw new BadRequestException('Use Accept, Start and Submit for Review to progress this task.');
+    return this.update(id,{status:body.status,assignedToId:userId},context);
+  }
+
+  async createOwnedForLead(leadId:string,body:Partial<TaskInput>,userId:string,context?:ActionContext){
+    const lead=await this.tasks.ownedLeadContext(leadId,userId);
+    if(!lead)throw new NotFoundException('Lead not found');
+    return this.create({...body,leadId,organizationId:lead.organization_id,assignedToId:userId},context);
   }
 
   async get(
@@ -78,11 +119,12 @@ export class TasksService {
       );
     }
 
-    const [events, attachments, leadAssignmentBatch] =
+    const [events, attachments, leadAssignmentBatch, taskWorkflow] =
       await Promise.all([
         this.tasks.events(id),
         this.tasks.listAttachments(id),
         this.tasks.leadAssignmentForTask(id),
+        this.tasks.workflowForTask(id),
       ]);
 
     return {
@@ -90,6 +132,7 @@ export class TasksService {
       events,
       attachments,
       lead_assignment_batch: leadAssignmentBatch,
+      task_workflow: taskWorkflow,
     };
   }
 
@@ -157,6 +200,16 @@ export class TasksService {
     const current =
       await this.get(id);
 
+    if (current.lead_assignment_batch) {
+      const requestedKeys = Object.keys(body).filter((key) => body[key as keyof TaskInput] !== undefined);
+      const disallowedKeys = requestedKeys.filter((key) => key !== 'status');
+      if (disallowedKeys.length > 0) {
+        throw new BadRequestException(
+          'Assignment-generated tasks are managed through the Lead assignment workflow. Only status may be updated here.',
+        );
+      }
+    }
+
     const input =
       await this.validate({
         title:
@@ -196,6 +249,10 @@ export class TasksService {
           body.dueAt === undefined
             ? current.due_at
             : body.dueAt,
+        taskWorkflowId:
+          body.taskWorkflowId === undefined
+            ? current.task_workflow_id
+            : body.taskWorkflowId,
       });
 
     const updated =
@@ -431,11 +488,42 @@ export class TasksService {
     return this.get(id);
   }
 
+
+  async submitForReview(id:string,context?:ActionContext){
+    const current=await this.ensureTask(id);
+    const actor=context?.actorUserId;
+    if(!actor||current.assigned_to_id!==actor) throw new BadRequestException('Only the assigned staff member can submit this task');
+    if(!current.accepted_at) throw new BadRequestException('Accept the task before submitting work');
+    if(current.status==='COMPLETED'||current.status==='CANCELLED') throw new BadRequestException('This task cannot be submitted');
+    const updated=await this.tasks.update(id,{title:current.title,description:current.description,organizationId:current.organization_id,leadId:current.lead_id,contactId:current.contact_id,assignedToId:current.assigned_to_id,status:'AWAITING_RESPONSE',priority:current.priority,startAt:current.start_at,dueAt:current.due_at,taskWorkflowId:current.task_workflow_id});
+    if(!updated) throw new NotFoundException('Task not found');
+    await this.tasks.addEvent({taskId:id,actorUserId:actor,eventType:'STATUS_CHANGED',message:'Work submitted for admin review',oldValues:{status:current.status},newValues:{status:'AWAITING_RESPONSE'}});
+    await this.audit.log({actorUserId:actor,action:'TASK_SUBMITTED_FOR_REVIEW',module:'tasks',entityType:'task',entityId:id,oldValues:{status:current.status},newValues:{status:'AWAITING_RESPONSE'},ipAddress:context?.ipAddress,userAgent:context?.userAgent});
+    return this.get(id);
+  }
+
+  async reviewSubmission(id:string,decision:'APPROVE'|'REVISION',message:string|undefined,context?:ActionContext){
+    const current=await this.ensureTask(id);
+    if(current.status!=='AWAITING_RESPONSE') throw new BadRequestException('Only submitted tasks can be reviewed');
+    const status:TaskStatus=decision==='APPROVE'?'COMPLETED':'BLOCKED';
+    const updated=await this.tasks.update(id,{title:current.title,description:current.description,organizationId:current.organization_id,leadId:current.lead_id,contactId:current.contact_id,assignedToId:current.assigned_to_id,status,priority:current.priority,startAt:current.start_at,dueAt:current.due_at,taskWorkflowId:current.task_workflow_id});
+    if(!updated) throw new NotFoundException('Task not found');
+    const clean=message?.trim();
+    await this.tasks.addEvent({taskId:id,actorUserId:context?.actorUserId,eventType:decision==='APPROVE'?'TASK_COMPLETED':'STATUS_CHANGED',message:decision==='APPROVE'?(clean||'Task approved and completed'):(clean?`Revision requested: ${clean}`:'Revision requested'),oldValues:{status:current.status},newValues:{status}});
+    await this.audit.log({actorUserId:context?.actorUserId,action:decision==='APPROVE'?'TASK_APPROVED':'TASK_REVISION_REQUESTED',module:'tasks',entityType:'task',entityId:id,oldValues:{status:current.status},newValues:{status,message:clean??null},ipAddress:context?.ipAddress,userAgent:context?.userAgent});
+    return this.get(id);
+  }
   async deleteTask(
     id: string,
     context?: ActionContext,
   ) {
     const task = await this.get(id);
+
+    if (task.lead_assignment_batch) {
+      throw new BadRequestException(
+        'Assignment-generated tasks cannot be deleted. Manage the underlying Lead assignment instead.',
+      );
+    }
 
     const storagePaths = task.attachments
       .map((attachment) => attachment.storage_path)
@@ -586,7 +674,7 @@ export class TasksService {
 
     if (upload.error) {
       throw new BadRequestException(
-        `Attachment upload failed: ${upload.error.message}`,
+        'Attachment upload failed. Please try again.',
       );
     }
 
@@ -685,8 +773,7 @@ export class TasksService {
       !signed.data?.signedUrl
     ) {
       throw new BadRequestException(
-        signed.error?.message ??
-          'Unable to create download link',
+        'Unable to create download link',
       );
     }
 
@@ -734,7 +821,7 @@ export class TasksService {
 
       if (removed.error) {
         throw new BadRequestException(
-          `Unable to delete attachment: ${removed.error.message}`,
+          'Unable to delete attachment. Please try again.',
         );
       }
     }
@@ -770,6 +857,16 @@ export class TasksService {
       id: attachmentId,
       deleted: true,
     };
+  }
+
+  async toggleWorkflowStep(taskId:string,stepId:string,completed:boolean,context?:ActionContext){
+    const task=await this.ensureTask(taskId);
+    if(!task.task_workflow_id) throw new BadRequestException('This task does not use a workflow guide');
+    if(!context?.actorUserId) throw new BadRequestException('Authenticated user is required');
+    const ok=await this.tasks.toggleWorkflowStep(taskId,stepId,context.actorUserId,completed);
+    if(!ok) throw new BadRequestException('Workflow step does not belong to this task');
+    await this.audit.log({actorUserId:context.actorUserId,action:completed?'TASK_WORKFLOW_STEP_COMPLETED':'TASK_WORKFLOW_STEP_REOPENED',module:'tasks',entityType:'task',entityId:taskId,newValues:{stepId,completed},ipAddress:context.ipAddress,userAgent:context.userAgent});
+    return this.get(taskId);
   }
 
   private async ensureTask(
@@ -866,6 +963,8 @@ export class TasksService {
       this.clean(
         body.assignedToId,
       );
+    const taskWorkflowId =
+      this.clean(body.taskWorkflowId);
 
     if (
       organizationId &&
@@ -916,6 +1015,18 @@ export class TasksService {
     }
 
     if (
+      taskWorkflowId &&
+      !(await this.tasks.entityExists(
+        'task_workflows',
+        taskWorkflowId,
+      ))
+    ) {
+      throw new BadRequestException(
+        'Invalid task workflow',
+      );
+    }
+
+    if (
       leadId &&
       organizationId &&
       !(await this.tasks
@@ -959,6 +1070,7 @@ export class TasksService {
         this.clean(body.startAt),
       dueAt:
         this.clean(body.dueAt),
+      taskWorkflowId,
     };
   }
 

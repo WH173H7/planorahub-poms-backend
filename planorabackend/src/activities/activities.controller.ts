@@ -98,4 +98,34 @@ export class LeadActivitiesController {
   async listForLead(@Param('leadId') leadId: string) {
     return { success: true, data: await this.activities.listForLead(leadId) };
   }
+
+  @Post(':leadId/activities')
+  @RequirePermission('activities.create')
+  async createForLead(
+    @Param('leadId') leadId: string,
+    @Body() body: Partial<ActivityInput>,
+    @Req() request: AuthenticatedRequest,
+    @Headers('user-agent') userAgent?: string,
+  ) {
+    return {
+      success: true,
+      data: await this.activities.createForLead(leadId, body, {
+        actorUserId: request.user!.id,
+        ipAddress: request.ip,
+        userAgent,
+      }),
+    };
+  }
+}
+
+@Controller('admin/follow-ups')
+@UseGuards(AuthGuard, PermissionGuard)
+export class AdminFollowUpsController {
+  constructor(private readonly activities: ActivitiesService) {}
+
+  @Get()
+  @RequirePermission('activities.read.all')
+  async list() {
+    return { success: true, data: await this.activities.listFollowUps() };
+  }
 }

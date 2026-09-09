@@ -12,6 +12,11 @@ import {
   deleteContactMethod,
   updateContact,
   updateContactMethod,
+  createOwnedContact,
+  createOwnedContactMethod,
+  deleteOwnedContactMethod,
+  updateOwnedContact,
+  updateOwnedContactMethod,
 } from '@/lib/leads/api';
 import {
   CONTACT_METHOD_TYPES,
@@ -26,6 +31,7 @@ type ContactDialogProps = {
   contact?: Contact | null;
   onClose: () => void;
   onSaved: () => Promise<void>;
+  staffLeadId?: string;
 };
 
 type MethodDraft = {
@@ -66,6 +72,7 @@ export function ContactDialog({
   contact = null,
   onClose,
   onSaved,
+  staffLeadId,
 }: ContactDialogProps) {
   const editing = Boolean(contact);
   const [saving, setSaving] = useState(false);
@@ -131,7 +138,9 @@ export function ContactDialog({
 
     try {
       if (!contact) {
-        const created = await createContact(contactInput);
+        const created = staffLeadId
+          ? await createOwnedContact(staffLeadId, contactInput)
+          : await createContact(contactInput);
         let consumedEmail = false;
         let consumedPhone = false;
 
@@ -144,7 +153,10 @@ export function ContactDialog({
             consumedPhone = true;
             continue;
           }
-          await createContactMethod(created.id, {
+          const createMethod = staffLeadId
+            ? (input: Parameters<typeof createContactMethod>[1]) => createOwnedContactMethod(staffLeadId, created.id, input)
+            : (input: Parameters<typeof createContactMethod>[1]) => createContactMethod(created.id, input);
+          await createMethod({
             type: method.type,
             value: method.value,
             label: method.label || null,
@@ -152,7 +164,8 @@ export function ContactDialog({
           });
         }
       } else {
-        await updateContact(contact.id, contactInput);
+        if (staffLeadId) await updateOwnedContact(staffLeadId, contact.id, contactInput);
+        else await updateContact(contact.id, contactInput);
 
         const retainedManualIds = new Set(
           activeMethods
@@ -162,7 +175,8 @@ export function ContactDialog({
 
         for (const id of existingManualIds) {
           if (!retainedManualIds.has(id)) {
-            await deleteContactMethod(contact.id, id);
+            if (staffLeadId) await deleteOwnedContactMethod(staffLeadId, contact.id, id);
+            else await deleteContactMethod(contact.id, id);
           }
         }
 
@@ -177,9 +191,11 @@ export function ContactDialog({
           };
 
           if (method.id) {
-            await updateContactMethod(contact.id, method.id, payload);
+            if (staffLeadId) await updateOwnedContactMethod(staffLeadId, contact.id, method.id, payload);
+            else await updateContactMethod(contact.id, method.id, payload);
           } else {
-            await createContactMethod(contact.id, payload);
+            if (staffLeadId) await createOwnedContactMethod(staffLeadId, contact.id, payload);
+            else await createContactMethod(contact.id, payload);
           }
         }
       }

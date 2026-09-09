@@ -104,6 +104,18 @@ export class ActivitiesRepository {
     return result.rows as ActivityRow[];
   }
 
+  async listFollowUps(assignedToId?: string): Promise<ActivityRow[]> {
+    const result = await this.db.query(
+      `${this.selectSql()}
+       WHERE a.activity_type='FOLLOW_UP'
+         AND ($1::uuid IS NULL OR a.assigned_to_id=$1)
+       ORDER BY CASE WHEN a.status IN ('COMPLETED','CANCELLED') THEN 1 ELSE 0 END,
+         a.scheduled_at NULLS LAST, a.created_at DESC`,
+      [assignedToId ?? null],
+    );
+    return result.rows as ActivityRow[];
+  }
+
   async findById(id: string): Promise<ActivityRow | null> {
     const result = await this.db.query(
       `${this.selectSql()} WHERE a.id = $1 LIMIT 1`,
@@ -137,6 +149,14 @@ export class ActivitiesRepository {
       [leadId, organizationId],
     );
     return result.rowCount === 1;
+  }
+
+  async leadOrganization(leadId: string) {
+    const result = await this.db.query(
+      `SELECT organization_id, assigned_to_id FROM leads WHERE id=$1 LIMIT 1`,
+      [leadId],
+    );
+    return result.rows[0] ?? null;
   }
 
   async create(input: ActivityInput, createdById?: string): Promise<ActivityRow> {
@@ -180,6 +200,26 @@ export class ActivitiesRepository {
       ],
     );
     return (await this.findById(result.rows[0].id))!;
+  }
+
+  async updateLeadNextFollowUp(leadId: string, nextFollowUpAt: string) {
+    await this.db.query(
+      `UPDATE leads SET next_follow_up_at=$2, updated_at=NOW() WHERE id=$1`,
+      [leadId, nextFollowUpAt],
+    );
+  }
+
+  async recalculateLeadNextFollowUp(leadId: string) {
+    await this.db.query(
+      `UPDATE leads SET next_follow_up_at=(
+         SELECT MIN(COALESCE(a.scheduled_at,a.next_follow_up_at))
+         FROM activities a
+         WHERE a.lead_id=$1 AND a.activity_type='FOLLOW_UP'
+           AND a.status NOT IN ('COMPLETED','CANCELLED')
+           AND COALESCE(a.scheduled_at,a.next_follow_up_at) IS NOT NULL
+       ), updated_at=NOW() WHERE id=$1`,
+      [leadId],
+    );
   }
 
   async update(id: string, input: ActivityInput): Promise<ActivityRow | null> {

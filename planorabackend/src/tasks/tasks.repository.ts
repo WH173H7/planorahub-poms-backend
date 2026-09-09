@@ -72,6 +72,8 @@ export type TaskInput = {
 
   dueAt?: string | null;
 
+  taskWorkflowId?: string | null;
+
 };
 
 export type TaskRow = {
@@ -128,6 +130,10 @@ export type TaskRow = {
   created_at: string;
 
   updated_at: string;
+
+  task_workflow_id: string | null;
+
+  task_workflow_name?: string | null;
 
 };
 
@@ -242,6 +248,7 @@ export class TasksRepository {
 
         creator.first_name AS creator_first_name,
         creator.last_name AS creator_last_name,
+        tw.name AS task_workflow_name,
         accepted_by.first_name AS accepted_by_first_name,
         accepted_by.last_name AS accepted_by_last_name
 
@@ -267,6 +274,8 @@ export class TasksRepository {
         ON creator.id = t.created_by_id
       LEFT JOIN users accepted_by
         ON accepted_by.id = t.accepted_by_id
+      LEFT JOIN task_workflows tw
+        ON tw.id = t.task_workflow_id
 
       ORDER BY
 
@@ -288,6 +297,10 @@ export class TasksRepository {
 
     return result.rows as TaskRow[];
 
+  }
+
+  async listOwned(userId: string): Promise<TaskRow[]> {
+    return (await this.list()).filter((task) => task.assigned_to_id === userId);
   }
 
   async findById(
@@ -320,6 +333,7 @@ export class TasksRepository {
 
           creator.first_name AS creator_first_name,
           creator.last_name AS creator_last_name,
+          tw.name AS task_workflow_name,
           accepted_by.first_name AS accepted_by_first_name,
           accepted_by.last_name AS accepted_by_last_name
 
@@ -345,6 +359,8 @@ export class TasksRepository {
           ON creator.id = t.created_by_id
         LEFT JOIN users accepted_by
           ON accepted_by.id = t.accepted_by_id
+        LEFT JOIN task_workflows tw
+          ON tw.id = t.task_workflow_id
 
         WHERE t.id = $1
 
@@ -364,6 +380,11 @@ export class TasksRepository {
 
     );
 
+  }
+
+  async findOwnedById(id: string, userId: string): Promise<TaskRow | null> {
+    const task = await this.findById(id);
+    return task?.assigned_to_id === userId ? task : null;
   }
 
   async events(
@@ -416,7 +437,8 @@ export class TasksRepository {
 
       | 'contacts'
 
-      | 'users',
+      | 'users'
+      | 'task_workflows',
 
     id: string,
 
@@ -498,6 +520,14 @@ export class TasksRepository {
 
   }
 
+  async ownedLeadContext(leadId: string, userId: string) {
+    const result = await this.db.query(
+      `SELECT id,organization_id FROM leads WHERE id=$1 AND assigned_to_id=$2 LIMIT 1`,
+      [leadId,userId],
+    );
+    return result.rows[0] ?? null;
+  }
+
   async create(
 
     input: TaskInput,
@@ -534,13 +564,15 @@ export class TasksRepository {
 
           due_at,
 
+          task_workflow_id,
+
           completed_at
 
         )
 
         VALUES (
 
-          $1,$2,$3,$4,$5,$6,$7,$8::task_status,$9::task_priority,$10,$11,
+          $1,$2,$3,$4,$5,$6,$7,$8::task_status,$9::task_priority,$10,$11,$12,
           CASE
 
             WHEN $8::task_status = 'COMPLETED'::task_status
@@ -580,6 +612,8 @@ export class TasksRepository {
         input.startAt ?? null,
 
         input.dueAt ?? null,
+
+        input.taskWorkflowId ?? null,
 
       ],
 
@@ -623,6 +657,8 @@ export class TasksRepository {
           start_at = $10,
 
           due_at = $11,
+
+          task_workflow_id = $12,
 
           completed_at = CASE
 
@@ -671,6 +707,8 @@ export class TasksRepository {
         input.startAt ?? null,
 
         input.dueAt ?? null,
+
+        input.taskWorkflowId ?? null,
 
       ],
 
@@ -1079,6 +1117,31 @@ export class TasksRepository {
       items:
         itemsResult.rows as LeadAssignmentTaskBatch['items'],
     };
+  }
+
+  async workflowForTask(taskId: string) {
+    const workflow = await this.db.query(`
+      SELECT w.id,w.name,w.description,w.category
+      FROM tasks t JOIN task_workflows w ON w.id=t.task_workflow_id
+      WHERE t.id=$1 LIMIT 1
+    `,[taskId]);
+    if (!workflow.rows[0]) return null;
+    const steps = await this.db.query(`
+      SELECT s.id,s.position,s.title,s.guidance,s.requires_evidence,
+             p.completed_at,p.completed_by_id,u.first_name AS completed_by_first_name,u.last_name AS completed_by_last_name
+      FROM task_workflow_steps s
+      LEFT JOIN task_workflow_progress p ON p.step_id=s.id AND p.task_id=$1
+      LEFT JOIN users u ON u.id=p.completed_by_id
+      WHERE s.workflow_id=$2 ORDER BY s.position
+    `,[taskId,workflow.rows[0].id]);
+    return {...workflow.rows[0],steps:steps.rows};
+  }
+
+  async toggleWorkflowStep(taskId:string,stepId:string,userId:string,completed:boolean){
+    const valid=await this.db.query(`SELECT 1 FROM tasks t JOIN task_workflow_steps s ON s.workflow_id=t.task_workflow_id WHERE t.id=$1 AND s.id=$2 LIMIT 1`,[taskId,stepId]);
+    if(!valid.rowCount) return false;
+    await this.db.query(`INSERT INTO task_workflow_progress(task_id,step_id,completed_by_id,completed_at,updated_at) VALUES($1,$2,$3,CASE WHEN $4 THEN NOW() ELSE NULL END,NOW()) ON CONFLICT(task_id,step_id) DO UPDATE SET completed_by_id=CASE WHEN $4 THEN $3 ELSE NULL END,completed_at=CASE WHEN $4 THEN NOW() ELSE NULL END,updated_at=NOW()`,[taskId,stepId,userId,completed]);
+    return true;
   }
 
 }

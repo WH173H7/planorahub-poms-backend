@@ -1,0 +1,1 @@
+import {Module} from '@nestjs/common';import {LetterheadController} from './letterhead.controller.js';import {LetterheadService} from './letterhead.service.js';@Module({controllers:[LetterheadController],providers:[LetterheadService]})export class LetterheadModule{}

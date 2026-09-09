@@ -16,9 +16,10 @@ import { AppTopbar } from './app-topbar';
 import { MobileNavigation } from './mobile-navigation';
 import { PageContainer } from './page-container';
 import { PageHeader } from './page-layout';
+import { FloatingChat } from '@/components/workspace-ops/floating-chat';
 
 type AppShellProps = {
-  area: 'admin' | 'staff';
+  area: 'admin' | 'staff' | 'auto';
   title: string;
   description?: string;
   personalize?: 'welcome' | 'greeting';
@@ -129,7 +130,7 @@ export function AppShell({
   }
 
   const navigation =
-    area === 'admin' ? adminNavigation : staffNavigation;
+    area === 'admin' || (area === 'auto' && hasAdministrativeAccess(user)) ? adminNavigation : staffNavigation;
 
   const hour = new Date().getHours();
 
@@ -193,6 +194,7 @@ export function AppShell({
           </PageContainer>
         </main>
       </div>
+      <FloatingChat />
     </div>
   );
 }

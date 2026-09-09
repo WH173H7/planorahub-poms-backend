@@ -13,6 +13,7 @@ import { supabase } from '@/lib/supabase/client';
 export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [checkingSession, setCheckingSession] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -22,7 +23,6 @@ export default function LoginPage() {
 
     async function checkExistingSession() {
       const { data } = await supabase.auth.getSession();
-
       if (!active) return;
 
       if (!data.session) {
@@ -32,19 +32,13 @@ export default function LoginPage() {
 
       try {
         const user = await getCurrentCrmUser();
-
-        if (active) {
-          window.location.replace(routeForUser(user));
-        }
+        if (active) window.location.replace(routeForUser(user));
       } catch {
-        if (active) {
-          setCheckingSession(false);
-        }
+        if (active) setCheckingSession(false);
       }
     }
 
     void checkExistingSession();
-
     return () => {
       active = false;
     };
@@ -52,18 +46,20 @@ export default function LoginPage() {
 
   async function signIn(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-
     setSubmitting(true);
     setError(null);
 
-    const { data, error: authError } =
-      await supabase.auth.signInWithPassword({
-        email: email.trim().toLowerCase(),
-        password,
-      });
+    const { data, error: authError } = await supabase.auth.signInWithPassword({
+      email: email.trim().toLowerCase(),
+      password,
+    });
 
     if (authError || !data.session) {
-      setError(authError?.message ?? 'Unable to sign in. Please try again.');
+      setError(
+        authError?.message === 'Invalid login credentials'
+          ? 'Invalid email or password. For a newly created staff account, use the temporary password shown by the Super Admin or ask the Super Admin to reset it.'
+          : authError?.message ?? 'Unable to sign in. Please try again.',
+      );
       setSubmitting(false);
       return;
     }
@@ -94,7 +90,6 @@ export default function LoginPage() {
               priority
               className="login-logo"
             />
-
             <div className="login-heading">
               <h1>Welcome back</h1>
               <p>Sign in to continue to PlanoraHub CRM.</p>
@@ -114,16 +109,26 @@ export default function LoginPage() {
               disabled={submitting}
             />
 
-            <Input
-              id="password"
-              label="Password"
-              type="password"
-              autoComplete="current-password"
-              required
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              disabled={submitting}
-            />
+            <div className="password-field-wrap">
+              <Input
+                id="password"
+                label="Password"
+                type={showPassword ? 'text' : 'password'}
+                autoComplete="current-password"
+                required
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                disabled={submitting}
+              />
+              <button
+                type="button"
+                className="password-visibility"
+                onClick={() => setShowPassword((value) => !value)}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+              >
+                {showPassword ? 'Hide' : 'Show'}
+              </button>
+            </div>
 
             {error ? <Alert tone="error">{error}</Alert> : null}
 

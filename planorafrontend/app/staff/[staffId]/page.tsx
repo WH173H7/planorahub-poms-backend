@@ -1,0 +1,1 @@
+import {StaffDetailView} from '@/components/staff/staff-detail-view';export default async function Page({params}:{params:Promise<{staffId:string}>}){const{staffId}=await params;return <StaffDetailView staffId={staffId}/>}

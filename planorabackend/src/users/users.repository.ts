@@ -26,7 +26,8 @@ export class UsersRepository {
     const r = await this.db.query(`
       SELECT u.id,u.first_name,u.last_name,u.email,u.phone,u.job_title,u.status,u.must_change_password,u.last_login_at,u.created_at,
              r.id AS role_id,r.code AS role_code,r.name AS role_name,
-             d.id AS department_id,d.name AS department_name
+             d.id AS department_id,d.name AS department_name,
+             COALESCE((SELECT string_agg(t.name, ', ' ORDER BY t.name) FROM team_members tm JOIN teams t ON t.id=tm.team_id WHERE tm.user_id=u.id),'') AS team_names
       FROM users u
       JOIN roles r ON r.id=u.role_id
       LEFT JOIN departments d ON d.id=u.department_id
@@ -53,7 +54,7 @@ export class UsersRepository {
         `SELECT t.id,t.name,t.department_id,d.name AS department_name
          FROM team_members tm
          JOIN teams t ON t.id=tm.team_id
-         JOIN departments d ON d.id=t.department_id
+         LEFT JOIN departments d ON d.id=t.department_id
          WHERE tm.user_id=$1
          ORDER BY t.name`,
         [id],

@@ -39,6 +39,12 @@ export class OrganizationsController {
     };
   }
 
+  @Get(':id/360')
+  @RequirePermission('organizations.read.all')
+  async get360(@Param('id') id: string) {
+    return { success: true, data: await this.organizations.get360(id) };
+  }
+
   @Get(':id')
   @RequirePermission('organizations.read.all')
   async get(

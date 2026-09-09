@@ -1,0 +1,14 @@
+import {BadRequestException,Injectable,NotFoundException} from '@nestjs/common';
+import {DatabaseService} from '../database/database.service.js';
+import {AuditService} from '../audit/audit.service.js';
+type Ctx={actorUserId?:string;ipAddress?:string;userAgent?:string};
+type TemplateInput={name:string;category?:string|null;subject?:string|null;body:string;usageNotes?:string|null;isActive?:boolean};
+@Injectable()
+export class CommunicationsService{
+ constructor(private readonly db:DatabaseService,private readonly audit:AuditService){}
+ async list(activeOnly=true){return (await this.db.query(`SELECT t.*,u.first_name AS creator_first_name,u.last_name AS creator_last_name FROM communication_templates t LEFT JOIN users u ON u.id=t.created_by_id ${activeOnly?'WHERE t.is_active=TRUE':''} ORDER BY t.updated_at DESC,t.name ASC`)).rows}
+ async create(input:TemplateInput,ctx?:Ctx){const data=this.validate(input);const row=(await this.db.query(`INSERT INTO communication_templates(name,category,subject,body,usage_notes,is_active,created_by_id,updated_by_id) VALUES($1,$2,$3,$4,$5,$6,$7,$7) RETURNING *`,[data.name,data.category,data.subject,data.body,data.usageNotes,data.isActive,ctx?.actorUserId??null])).rows[0];await this.audit.log({actorUserId:ctx?.actorUserId,action:'COMMUNICATION_TEMPLATE_CREATED',module:'communications',entityType:'communication_template',entityId:String(row.id),newValues:row,ipAddress:ctx?.ipAddress,userAgent:ctx?.userAgent});return row}
+ async update(id:string,input:TemplateInput,ctx?:Ctx){const data=this.validate(input);const result=await this.db.query(`UPDATE communication_templates SET name=$2,category=$3,subject=$4,body=$5,usage_notes=$6,is_active=$7,updated_by_id=$8,updated_at=NOW() WHERE id=$1 RETURNING *`,[id,data.name,data.category,data.subject,data.body,data.usageNotes,data.isActive,ctx?.actorUserId??null]);if(!result.rowCount)throw new NotFoundException('Communication template not found');await this.audit.log({actorUserId:ctx?.actorUserId,action:'COMMUNICATION_TEMPLATE_UPDATED',module:'communications',entityType:'communication_template',entityId:id,newValues:result.rows[0],ipAddress:ctx?.ipAddress,userAgent:ctx?.userAgent});return result.rows[0]}
+ async archive(id:string,ctx?:Ctx){const result=await this.db.query(`UPDATE communication_templates SET is_active=FALSE,updated_by_id=$2,updated_at=NOW() WHERE id=$1 RETURNING id`,[id,ctx?.actorUserId??null]);if(!result.rowCount)throw new NotFoundException('Communication template not found');return result.rows[0]}
+ private validate(input:TemplateInput){const name=input.name?.trim(),body=input.body?.trim();if(!name)throw new BadRequestException('Template name is required');if(!body)throw new BadRequestException('Template body is required');return{name,body,category:input.category?.trim()||null,subject:input.subject?.trim()||null,usageNotes:input.usageNotes?.trim()||null,isActive:input.isActive??true}}
+}

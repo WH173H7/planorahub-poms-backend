@@ -1,0 +1,1 @@
+import {Organization360View} from '@/components/organizations/organization-360-view';export default async function OrganizationPage({params}:{params:Promise<{organizationId:string}>}){const {organizationId}=await params;return <Organization360View organizationId={organizationId}/>}

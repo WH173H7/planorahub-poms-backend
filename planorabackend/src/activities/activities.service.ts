@@ -36,6 +36,10 @@ export class ActivitiesService {
     return this.activities.listForLead(leadId);
   }
 
+  async listFollowUps(assignedToId?: string) {
+    return this.activities.listFollowUps(assignedToId);
+  }
+
   async get(id: string) {
     const activity = await this.activities.findById(id);
     if (!activity) throw new NotFoundException('Activity not found');
@@ -45,6 +49,10 @@ export class ActivitiesService {
   async create(body: Partial<ActivityInput>, context?: ActionContext) {
     const input = await this.validate(body);
     const activity = await this.activities.create(input, context?.actorUserId);
+
+    if (input.leadId && input.activityType === 'FOLLOW_UP') {
+      await this.activities.recalculateLeadNextFollowUp(input.leadId);
+    }
 
     await this.audit.log({
       actorUserId: context?.actorUserId,
@@ -57,7 +65,38 @@ export class ActivitiesService {
       userAgent: context?.userAgent,
     });
 
+    if (activity.activity_type === 'FOLLOW_UP') {
+      await this.audit.log({
+        actorUserId: context?.actorUserId,
+        action: 'FOLLOW_UP_SCHEDULED',
+        module: 'activities',
+        entityType: 'activity',
+        entityId: activity.id,
+        newValues: activity,
+        ipAddress: context?.ipAddress,
+        userAgent: context?.userAgent,
+      });
+    }
+
     return activity;
+  }
+
+  async createForLead(
+    leadId: string,
+    body: Partial<ActivityInput>,
+    context?: ActionContext,
+  ) {
+    const lead = await this.activities.leadOrganization(leadId);
+    if (!lead) throw new NotFoundException('Lead not found');
+    return this.create(
+      {
+        ...body,
+        leadId,
+        organizationId: lead.organization_id,
+        assignedToId: body.assignedToId ?? lead.assigned_to_id,
+      },
+      context,
+    );
   }
 
   async update(
@@ -99,10 +138,29 @@ export class ActivitiesService {
     const updated = await this.activities.update(id, input);
     if (!updated) throw new NotFoundException('Activity not found');
 
-    const action =
+    const affectedLeadIds = new Set(
+      [current.lead_id, updated.lead_id].filter(
+        (value): value is string => Boolean(value),
+      ),
+    );
+    for (const leadId of affectedLeadIds) {
+      await this.activities.recalculateLeadNextFollowUp(leadId);
+    }
+
+    const followUpAction = current.activity_type === 'FOLLOW_UP'
+      ? updated.status === 'COMPLETED' && current.status !== 'COMPLETED'
+        ? 'FOLLOW_UP_COMPLETED'
+        : updated.status === 'CANCELLED' && current.status !== 'CANCELLED'
+          ? 'FOLLOW_UP_CANCELLED'
+          : current.scheduled_at !== updated.scheduled_at
+            ? 'FOLLOW_UP_RESCHEDULED'
+            : null
+      : null;
+    const action = followUpAction ?? (
       current.status !== 'COMPLETED' && updated.status === 'COMPLETED'
         ? 'ACTIVITY_COMPLETED'
-        : 'ACTIVITY_UPDATED';
+        : 'ACTIVITY_UPDATED'
+    );
 
     await this.audit.log({
       actorUserId: context?.actorUserId,
@@ -117,6 +175,24 @@ export class ActivitiesService {
     });
 
     return updated;
+  }
+
+  async getOwned(id: string, userId: string) {
+    const activity = await this.get(id);
+    if (activity.assigned_to_id !== userId) {
+      throw new NotFoundException('Activity not found');
+    }
+    return activity;
+  }
+
+  async updateOwned(
+    id: string,
+    body: Partial<ActivityInput>,
+    userId: string,
+    context?: ActionContext,
+  ) {
+    await this.getOwned(id, userId);
+    return this.update(id, { ...body, assignedToId: userId }, context);
   }
 
   async remove(id: string, context?: ActionContext) {

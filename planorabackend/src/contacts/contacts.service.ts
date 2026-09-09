@@ -272,7 +272,10 @@ export class ContactsService {
 
     await this.audit.log({
       actorUserId: context?.actorUserId,
-      action: 'CONTACT_METHOD_UPDATED',
+      action:
+        current.verification_status !== updated.verification_status
+          ? 'CONTACT_METHOD_VERIFICATION_CHANGED'
+          : 'CONTACT_METHOD_UPDATED',
       module: 'contacts',
       entityType: 'contact_method',
       entityId: methodId,

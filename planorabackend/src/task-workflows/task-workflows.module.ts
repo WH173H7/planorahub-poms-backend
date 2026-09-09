@@ -1,0 +1,1 @@
+import {Module} from '@nestjs/common';import {TaskWorkflowsController} from './task-workflows.controller.js';import {TaskWorkflowsService} from './task-workflows.service.js';@Module({controllers:[TaskWorkflowsController],providers:[TaskWorkflowsService],exports:[TaskWorkflowsService]})export class TaskWorkflowsModule{}

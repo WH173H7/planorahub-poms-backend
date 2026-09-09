@@ -43,6 +43,30 @@ export class OrganizationsService {
     return organization;
   }
 
+  async get360(id: string) {
+    const organization = await this.get(id);
+    const related = await this.organizations.get360(id);
+    const currentRecord = related.leads[0] ?? null;
+    const leadRecords = related.leads as Array<{ record_type?: string }>;
+    const taskRecords = related.tasks as Array<{ status?: string }>;
+
+    return {
+      organization,
+      ...related,
+      currentRecord,
+      summary: {
+        contacts: related.contacts.length,
+        leads: leadRecords.filter((item) => item.record_type === 'LEAD').length,
+        prospects: leadRecords.filter((item) => item.record_type === 'PROSPECT').length,
+        clients: leadRecords.filter((item) => item.record_type === 'CLIENT').length,
+        openTasks: taskRecords.filter(
+          (item) => !['COMPLETED', 'CANCELLED'].includes(item.status ?? ''),
+        ).length,
+        activities: related.activities.length,
+      },
+    };
+  }
+
   async create(
     body: Partial<OrganizationInput>,
     context?: ActionContext,

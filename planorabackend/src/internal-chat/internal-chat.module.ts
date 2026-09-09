@@ -1,0 +1,1 @@
+import {Module} from '@nestjs/common';import {InternalChatController} from './internal-chat.controller.js';import {InternalChatService} from './internal-chat.service.js';@Module({controllers:[InternalChatController],providers:[InternalChatService]})export class InternalChatModule{}
