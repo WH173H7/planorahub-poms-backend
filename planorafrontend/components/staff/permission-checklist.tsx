@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { Permission } from '@/lib/staff/api';
 
 export function PermissionChecklist({
@@ -16,8 +16,6 @@ export function PermissionChecklist({
 }) {
   const [query, setQuery] = useState('');
   const [selectedOnly, setSelectedOnly] = useState(false);
-  const [openModules, setOpenModules] = useState<Set<string>>(new Set());
-  const initialized = useRef(false);
   const selected = useMemo(() => new Set(selectedIds), [selectedIds]);
   const needle = query.trim().toLowerCase();
 
@@ -46,58 +44,30 @@ export function PermissionChecklist({
       }));
   }, [permissions, needle, selectedOnly, selected]);
 
-  useEffect(() => {
-    if (initialized.current || !permissions.length) return;
-    const firstSelectedModule = permissions.find((permission) => selected.has(permission.id))?.module?.trim();
-    const firstModule = firstSelectedModule || permissions[0]?.module?.trim() || 'general';
-    setOpenModules(new Set([firstModule]));
-    initialized.current = true;
-  }, [permissions, selected]);
-
   const visibleCount = groups.reduce((total, group) => total + group.items.length, 0);
   const totalModules = new Set(permissions.map((permission) => permission.module?.trim() || 'general')).size;
 
-  const toggleModule = (module: string) => {
-    setOpenModules((current) => {
-      const next = new Set(current);
-      if (next.has(module)) next.delete(module);
-      else next.add(module);
-      return next;
-    });
-  };
-
   return (
-    <div className="permission-browser-v2">
-      <div className="permission-browser-v2__summary">
-        <div>
-          <span>Available</span>
-          <strong>{permissions.length}</strong>
-          <small>permissions</small>
-        </div>
-        <div>
-          <span>Selected</span>
-          <strong>{selectedIds.length}</strong>
-          <small>for this role</small>
-        </div>
-        <div>
-          <span>Modules</span>
-          <strong>{totalModules}</strong>
-          <small>access areas</small>
-        </div>
+    <div className="permission-browser-v3">
+      <div className="permission-browser-v3__summary">
+        <div><span>Available</span><strong>{permissions.length}</strong><small>permissions</small></div>
+        <div><span>Selected</span><strong>{selectedIds.length}</strong><small>effective access</small></div>
+        <div><span>Modules</span><strong>{totalModules}</strong><small>access areas</small></div>
       </div>
 
-      <div className="permission-browser-v2__toolbar">
-        <label className="permission-browser-v2__search">
-          <span className="sr-only">Search permissions</span>
+      <div className="permission-browser-v3__toolbar">
+        <div className="permission-browser-v3__search">
+          <span aria-hidden="true">⌕</span>
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search permissions, modules or access codes…"
+            aria-label="Search permissions"
           />
-        </label>
+        </div>
         <button
           type="button"
-          className={selectedOnly ? 'permission-browser-v2__filter is-active' : 'permission-browser-v2__filter'}
+          className={selectedOnly ? 'permission-browser-v3__filter is-active' : 'permission-browser-v3__filter'}
           onClick={() => setSelectedOnly((value) => !value)}
           aria-pressed={selectedOnly}
         >
@@ -105,82 +75,70 @@ export function PermissionChecklist({
         </button>
       </div>
 
-      <div className="permission-browser-v2__meta">
+      <div className="permission-browser-v3__meta">
         <span>{visibleCount} permission{visibleCount === 1 ? '' : 's'} shown</span>
-        <span>Choose the minimum access this role needs.</span>
+        <span>Expand a module to review access.</span>
       </div>
 
-      <div className="permission-browser-v2__groups">
-        {groups.map(({ module, items }) => {
+      <div className="permission-browser-v3__groups">
+        {groups.map(({ module, items }, index) => {
           const selectedInGroup = items.filter((item) => selected.has(item.id)).length;
           const allSelected = items.length > 0 && selectedInGroup === items.length;
-          const expanded = Boolean(needle) || openModules.has(module);
+          const shouldOpen = Boolean(needle) || selectedOnly || index === 0;
 
           return (
-            <section className={expanded ? 'permission-module is-open' : 'permission-module'} key={module}>
-              <div className="permission-module__head">
-                <button
-                  type="button"
-                  className="permission-module__toggle"
-                  onClick={() => toggleModule(module)}
-                  aria-expanded={expanded}
-                >
-                  <span className="permission-module__chevron" aria-hidden="true">›</span>
-                  <span className="permission-module__title">
-                    <strong>{human(module)}</strong>
-                    <small>{selectedInGroup} of {items.length} selected</small>
-                  </span>
-                  <span className="permission-module__progress" aria-hidden="true">
-                    <i style={{ width: `${items.length ? Math.round((selectedInGroup / items.length) * 100) : 0}%` }} />
-                  </span>
-                </button>
+            <details className="permission-module-v3" key={module} open={shouldOpen ? true : undefined}>
+              <summary>
+                <span className="permission-module-v3__icon" aria-hidden="true">›</span>
+                <span className="permission-module-v3__title">
+                  <strong>{human(module)}</strong>
+                  <small>{selectedInGroup} of {items.length} selected</small>
+                </span>
+                <span className="permission-module-v3__meter" aria-hidden="true"><i style={{ width: `${items.length ? Math.round((selectedInGroup / items.length) * 100) : 0}%` }} /></span>
                 {!readOnly && onToggle ? (
                   <button
                     type="button"
-                    className="permission-module__action"
-                    onClick={() => items.forEach((item) => onToggle(item.id, !allSelected))}
+                    className="permission-module-v3__bulk"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      items.forEach((item) => onToggle(item.id, !allSelected));
+                    }}
                   >
-                    {allSelected ? 'Clear all' : 'Select all'}
+                    {allSelected ? 'Clear' : 'Select all'}
                   </button>
                 ) : null}
-              </div>
+              </summary>
 
-              {expanded ? (
-                <div className="permission-module__list">
-                  {items.map((permission) => {
-                    const checked = selected.has(permission.id);
-                    const label = permissionLabel(permission);
-                    const detail = permission.description?.trim() || fallbackDescription(permission);
-
-                    return (
-                      <button
-                        key={permission.id}
-                        type="button"
-                        className={checked ? 'permission-row is-selected' : 'permission-row'}
-                        aria-pressed={checked}
+              <div className="permission-module-v3__list">
+                {items.map((permission) => {
+                  const checked = selected.has(permission.id);
+                  return (
+                    <label key={permission.id} className={checked ? 'permission-option-v3 is-selected' : 'permission-option-v3'}>
+                      <input
+                        type="checkbox"
+                        checked={checked}
                         disabled={readOnly}
-                        onClick={() => onToggle?.(permission.id, !checked)}
-                      >
-                        <span className="permission-row__check" aria-hidden="true">{checked ? '✓' : ''}</span>
-                        <span className="permission-row__copy">
-                          <strong>{label}</strong>
-                          <small>{detail}</small>
-                        </span>
-                        <code>{permission.code || 'permission'}</code>
-                      </button>
-                    );
-                  })}
-                </div>
-              ) : null}
-            </section>
+                        onChange={(event) => onToggle?.(permission.id, event.target.checked)}
+                      />
+                      <span className="permission-option-v3__copy">
+                        <strong>{permissionLabel(permission)}</strong>
+                        <small>{permission.description?.trim() || fallbackDescription(permission)}</small>
+                      </span>
+                      <code>{permission.code || 'permission'}</code>
+                    </label>
+                  );
+                })}
+              </div>
+            </details>
           );
         })}
       </div>
 
       {!visibleCount ? (
-        <div className="permission-browser-v2__empty">
+        <div className="permission-browser-v3__empty">
           <strong>{selectedOnly ? 'No selected permissions match this view.' : 'No permissions match your search.'}</strong>
-          <span>{selectedOnly ? 'Turn off “Selected only” or select permissions from a module.' : 'Try a module name such as Leads, Tasks, Staff or Analytics.'}</span>
+          <span>{selectedOnly ? 'Turn off “Selected only” to see the complete access catalogue.' : 'Try another permission or module name.'}</span>
         </div>
       ) : null}
     </div>
@@ -192,8 +150,7 @@ function permissionLabel(permission: Permission) {
 }
 
 function fallbackDescription(permission: Permission) {
-  const label = permissionLabel(permission).toLowerCase();
-  return `Allows this role to ${label}.`;
+  return `Allows access to ${permissionLabel(permission).toLowerCase()}.`;
 }
 
 function human(value: string) {

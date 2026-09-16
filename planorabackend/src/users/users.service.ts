@@ -45,7 +45,7 @@ export class UsersService {
       email,password:temporaryPassword,email_confirm:true,
       user_metadata:{first_name:dto.firstName.trim(),last_name:dto.lastName.trim(),must_change_password:true},
     });
-    if(error||!data.user) throw new BadRequestException(error?.message??'Unable to create authentication account');
+    if(error||!data.user) throw new BadRequestException(this.authAdminError(error?.message));
     let staff:any;
     try{
       staff=await this.usersRepository.createStaff({
@@ -101,7 +101,7 @@ export class UsersService {
       const attrs:any={user_metadata:{first_name:firstName,last_name:lastName}};
       if(email!==current.email){attrs.email=email;attrs.email_confirm=true;}
       const {error}=await this.supabase.admin.auth.admin.updateUserById(current.auth_user_id,attrs);
-      if(error) throw new BadRequestException(error.message);
+      if(error) throw new BadRequestException(this.authAdminError(error.message));
     }
 
     const updated=await this.usersRepository.updateStaff(id,{
@@ -125,7 +125,7 @@ export class UsersService {
     if(role?.code==='SUPER_ADMIN' && status!=='ACTIVE') await this.protectLastSuperAdmin();
     if(current.auth_user_id){
       const {error}=await this.supabase.admin.auth.admin.updateUserById(current.auth_user_id,{ban_duration:status==='ACTIVE'?'none':'876000h'});
-      if(error) throw new BadRequestException(error.message);
+      if(error) throw new BadRequestException(this.authAdminError(error.message));
     }
     await this.usersRepository.setStatus(id,status);
     await this.audit.log({actorUserId:ctx?.actorUserId,action:status==='ACTIVE'?'STAFF_REACTIVATED':status==='SUSPENDED'?'STAFF_SUSPENDED':'STAFF_DISABLED',
@@ -138,7 +138,7 @@ export class UsersService {
     if(!staff.auth_user_id) throw new BadRequestException('This staff account has no authentication account');
     const temporaryPassword=this.generateTemporaryPassword();
     const {error}=await this.supabase.admin.auth.admin.updateUserById(staff.auth_user_id,{password:temporaryPassword,user_metadata:{must_change_password:true}});
-    if(error) throw new BadRequestException(error.message);
+    if(error) throw new BadRequestException(this.authAdminError(error.message));
     await this.usersRepository.markPasswordResetRequired(id);
     const profile:any=await this.getStaff(id);
     const emailDelivery=sendEmail
@@ -156,6 +156,13 @@ export class UsersService {
     return {temporaryPassword,emailDelivery};
   }
 
+
+  private authAdminError(message?:string){
+    const raw=(message||'Unable to create authentication account').trim();
+    if(/invalid api key/i.test(raw)) return 'Production Supabase admin credentials were rejected. Verify SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY on the backend deployment belong to the same Supabase project and contain no surrounding quotes.';
+    if(/jwt|service.?role|unauthorized|forbidden/i.test(raw)) return `Supabase admin authentication failed: ${raw}`;
+    return raw;
+  }
   private async requireStaff(id:string){const s=await this.usersRepository.findById(id);if(!s) throw new NotFoundException('Staff member not found');return s;}
   private async protectLastSuperAdmin(){if((await this.usersRepository.countEnabledSuperAdmins())<=1) throw new BadRequestException('The last enabled Super Admin cannot be suspended, disabled or moved to another role');}
   private async validateOverrides(items:Override[]){const ids=[...new Set(items.map(x=>x.permissionId))];if(!(await this.usersRepository.permissionsExist(ids))) throw new BadRequestException('One or more permission overrides are invalid');if(items.some(x=>!['ALLOW','DENY'].includes(x.effect))) throw new BadRequestException('Invalid permission override effect');}

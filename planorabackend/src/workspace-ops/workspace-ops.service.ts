@@ -1,10 +1,11 @@
-import {BadRequestException,Injectable,NotFoundException} from '@nestjs/common';
+import {BadRequestException,Injectable,Logger,NotFoundException} from '@nestjs/common';
 import {randomUUID} from 'node:crypto';
 import {SupabaseService} from '../supabase/supabase.service.js';
 import {DatabaseService} from '../database/database.service.js';
 import {AuditService} from '../audit/audit.service.js';
 @Injectable()
 export class WorkspaceOpsService{
+ private readonly logger=new Logger(WorkspaceOpsService.name);
  constructor(private readonly db:DatabaseService,private readonly supabase:SupabaseService,private readonly audit:AuditService){}
  async departments(){return (await this.db.query(`SELECT d.*,(SELECT COUNT(*)::int FROM users u WHERE u.department_id=d.id AND u.status NOT IN('DISABLED')) staff_count,(SELECT COUNT(*)::int FROM teams t WHERE t.department_id=d.id AND t.is_active=true) team_count FROM departments d ORDER BY d.is_active DESC,d.name`)).rows}
  async createDepartment(b:{name?:string;description?:string}){const name=b.name?.trim();if(!name)throw new BadRequestException('Department name is required');return (await this.db.query(`INSERT INTO departments(name,description) VALUES($1,$2) RETURNING *`,[name,b.description?.trim()||null])).rows[0]}
@@ -99,94 +100,102 @@ export class WorkspaceOpsService{
  async teamMembers(id:string){return (await this.db.query(`SELECT u.id,u.first_name,u.last_name,u.email,u.job_title,d.name department_name,(u.id=t.manager_id) is_team_lead FROM teams t JOIN team_members tm ON tm.team_id=t.id JOIN users u ON u.id=tm.user_id LEFT JOIN departments d ON d.id=u.department_id WHERE t.id=$1 ORDER BY (u.id=t.manager_id) DESC,u.first_name,u.last_name`,[id])).rows}
  async setTeamMembers(id:string,b:{memberIds?:string[];managerId?:string|null}){const ids=[...new Set(b.memberIds??[])];const c=await this.db.getClient();try{await c.query('BEGIN');await c.query(`DELETE FROM team_members WHERE team_id=$1`,[id]);for(const uid of ids)await c.query(`INSERT INTO team_members(team_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING`,[id,uid]);if(b.managerId){await c.query(`INSERT INTO team_members(team_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING`,[id,b.managerId]);}await c.query(`UPDATE teams SET manager_id=$2,updated_at=NOW() WHERE id=$1`,[id,b.managerId||null]);await c.query('COMMIT');return this.teamMembers(id)}catch(e){await c.query('ROLLBACK');throw e}finally{c.release()}}
  async staffOpsAnalytics(){
+  const q=<T extends Record<string,any>>(label:string,sql:string,fallback:T[])=>this.analyticsQuery<T>(label,sql,fallback);
   const [revenue,crm,tasks,followups,communications,workforce,staff,departments,teams,stages,sources,industries,commercial,taskStatuses,taskPriorities,trends]=await Promise.all([
-    this.db.query(`SELECT COALESCE(SUM(expected_revenue) FILTER(WHERE record_type='PROSPECT'),0)::float expected,COALESCE(SUM(actual_revenue) FILTER(WHERE record_type='CLIENT'),0)::float actual FROM leads WHERE record_type IN('PROSPECT','CLIENT')`),
-    this.db.query(`SELECT
+    q('revenue',`SELECT COALESCE(SUM(expected_revenue) FILTER(WHERE record_type='PROSPECT'),0)::float expected,COALESCE(SUM(actual_revenue) FILTER(WHERE record_type='CLIENT'),0)::float actual FROM leads WHERE record_type IN('PROSPECT','CLIENT')`,[{expected:0,actual:0}]),
+    q('crm',`SELECT
       COUNT(*) FILTER(WHERE record_type='LEAD')::int leads,
-      COUNT(*) FILTER(WHERE record_type='LEAD' AND available_in_pool=TRUE)::int pool,
+      COUNT(*) FILTER(WHERE record_type='LEAD' AND COALESCE(available_in_pool,FALSE)=TRUE)::int pool,
       COUNT(*) FILTER(WHERE record_type='LEAD' AND (assigned_to_id IS NOT NULL OR assigned_team_id IS NOT NULL))::int assigned,
       COUNT(*) FILTER(WHERE record_type='LEAD' AND stage::text NOT IN('NEW','READY_FOR_PROSPECT_REVIEW'))::int active_pursuit,
       COUNT(*) FILTER(WHERE record_type='PROSPECT')::int prospects,
       COUNT(*) FILTER(WHERE record_type='CLIENT')::int clients,
       ROUND(100.0*COUNT(*) FILTER(WHERE record_type='PROSPECT')/NULLIF(COUNT(*) FILTER(WHERE record_type IN('LEAD','PROSPECT')),0),1)::float lead_to_prospect_rate,
       ROUND(100.0*COUNT(*) FILTER(WHERE record_type='CLIENT')/NULLIF(COUNT(*) FILTER(WHERE record_type IN('PROSPECT','CLIENT')),0),1)::float prospect_to_client_rate
-      FROM leads`),
-    this.db.query(`SELECT COUNT(*)::int total,
-      COUNT(*) FILTER(WHERE status='COMPLETED')::int completed,
-      COUNT(*) FILTER(WHERE status NOT IN('COMPLETED','CANCELLED'))::int active,
-      COUNT(*) FILTER(WHERE control_state='SCHEDULED')::int scheduled,
-      COUNT(*) FILTER(WHERE control_state='PAUSED')::int paused,
-      COUNT(*) FILTER(WHERE due_at<NOW() AND status NOT IN('COMPLETED','CANCELLED'))::int overdue,
-      ROUND(100.0*COUNT(*) FILTER(WHERE status='COMPLETED')/NULLIF(COUNT(*),0),1)::float completion_rate
-      FROM tasks`),
-    this.db.query(`SELECT COUNT(*)::int total,
-      COUNT(*) FILTER(WHERE status='COMPLETED')::int completed,
-      COUNT(*) FILTER(WHERE status NOT IN('COMPLETED','CANCELLED') AND scheduled_at<NOW())::int overdue,
-      COUNT(*) FILTER(WHERE status NOT IN('COMPLETED','CANCELLED') AND scheduled_at::date=CURRENT_DATE)::int today,
-      COUNT(*) FILTER(WHERE status NOT IN('COMPLETED','CANCELLED') AND scheduled_at>NOW())::int upcoming
-      FROM activities`),
-    this.db.query(`SELECT
+      FROM leads`,[{leads:0,pool:0,assigned:0,active_pursuit:0,prospects:0,clients:0,lead_to_prospect_rate:0,prospect_to_client_rate:0}]),
+    q('tasks',`SELECT COUNT(*)::int total,
+      COUNT(*) FILTER(WHERE status::text='COMPLETED')::int completed,
+      COUNT(*) FILTER(WHERE status::text NOT IN('COMPLETED','CANCELLED'))::int active,
+      COUNT(*) FILTER(WHERE COALESCE(control_state,'ACTIVE')='SCHEDULED')::int scheduled,
+      COUNT(*) FILTER(WHERE COALESCE(control_state,'ACTIVE')='PAUSED')::int paused,
+      COUNT(*) FILTER(WHERE due_at<NOW() AND status::text NOT IN('COMPLETED','CANCELLED'))::int overdue,
+      ROUND(100.0*COUNT(*) FILTER(WHERE status::text='COMPLETED')/NULLIF(COUNT(*),0),1)::float completion_rate
+      FROM tasks`,[{total:0,completed:0,active:0,scheduled:0,paused:0,overdue:0,completion_rate:0}]),
+    q('followups',`SELECT COUNT(*)::int total,
+      COUNT(*) FILTER(WHERE status::text='COMPLETED')::int completed,
+      COUNT(*) FILTER(WHERE status::text NOT IN('COMPLETED','CANCELLED') AND scheduled_at<NOW())::int overdue,
+      COUNT(*) FILTER(WHERE status::text NOT IN('COMPLETED','CANCELLED') AND scheduled_at::date=CURRENT_DATE)::int today,
+      COUNT(*) FILTER(WHERE status::text NOT IN('COMPLETED','CANCELLED') AND scheduled_at>NOW())::int upcoming
+      FROM activities`,[{total:0,completed:0,overdue:0,today:0,upcoming:0}]),
+    q('communications',`SELECT
       (SELECT COUNT(*)::int FROM crm_mail_messages WHERE direction='OUTBOUND') outbound_mail,
       (SELECT COUNT(*)::int FROM crm_mail_messages WHERE direction='INBOUND') inbound_mail,
       (SELECT COUNT(*)::int FROM letter_documents) letters,
       (SELECT COUNT(*)::int FROM letter_documents WHERE approval_status='PENDING_APPROVAL') pending_letters,
       (SELECT COUNT(*)::int FROM letter_documents WHERE approval_status='APPROVED') approved_letters,
       (SELECT COUNT(*)::int FROM shared_files) shared_files,
-      (SELECT COUNT(*)::int FROM shared_folders) shared_folders`),
-    this.db.query(`SELECT
-      COUNT(*) FILTER(WHERE u.status='ACTIVE')::int active_staff,
-      (SELECT COUNT(*)::int FROM departments WHERE is_active=TRUE) departments,
-      (SELECT COUNT(*)::int FROM teams WHERE is_active=TRUE) teams
-      FROM users u`),
-    this.db.query(`SELECT u.id,u.first_name,u.last_name,d.name department_name,r.name role_name,
+      (SELECT COUNT(*)::int FROM shared_folders) shared_folders`,[{outbound_mail:0,inbound_mail:0,letters:0,pending_letters:0,approved_letters:0,shared_files:0,shared_folders:0}]),
+    q('workforce',`SELECT
+      COUNT(*) FILTER(WHERE u.status::text='ACTIVE')::int active_staff,
+      (SELECT COUNT(*)::int FROM departments WHERE COALESCE(is_active,TRUE)=TRUE) departments,
+      (SELECT COUNT(*)::int FROM teams WHERE COALESCE(is_active,TRUE)=TRUE) teams
+      FROM users u`,[{active_staff:0,departments:0,teams:0}]),
+    q('staff',`SELECT u.id,u.first_name,u.last_name,d.name department_name,r.name role_name,
       (SELECT COUNT(*)::int FROM leads l WHERE l.assigned_to_id=u.id AND l.record_type='LEAD') leads,
       (SELECT COUNT(*)::int FROM leads l WHERE l.assigned_to_id=u.id AND l.record_type='PROSPECT') prospects,
       (SELECT COUNT(*)::int FROM leads l WHERE l.assigned_to_id=u.id AND l.record_type='CLIENT') clients,
       COALESCE((SELECT SUM(l.expected_revenue)::float FROM leads l WHERE l.assigned_to_id=u.id AND l.record_type='PROSPECT'),0)::float expected_revenue,
       COALESCE((SELECT SUM(l.actual_revenue)::float FROM leads l WHERE l.assigned_to_id=u.id AND l.record_type='CLIENT'),0)::float actual_revenue,
       (SELECT COUNT(*)::int FROM tasks t WHERE t.assigned_to_id=u.id OR t.accepted_by_id=u.id) assigned_tasks,
-      (SELECT COUNT(*)::int FROM tasks t WHERE (t.assigned_to_id=u.id OR t.accepted_by_id=u.id) AND t.status='COMPLETED') completed_tasks,
-      (SELECT COUNT(*)::int FROM tasks t WHERE (t.assigned_to_id=u.id OR t.accepted_by_id=u.id) AND t.due_at<NOW() AND t.status NOT IN('COMPLETED','CANCELLED')) overdue_tasks
+      (SELECT COUNT(*)::int FROM tasks t WHERE (t.assigned_to_id=u.id OR t.accepted_by_id=u.id) AND t.status::text='COMPLETED') completed_tasks,
+      (SELECT COUNT(*)::int FROM tasks t WHERE (t.assigned_to_id=u.id OR t.accepted_by_id=u.id) AND t.due_at<NOW() AND t.status::text NOT IN('COMPLETED','CANCELLED')) overdue_tasks
       FROM users u LEFT JOIN departments d ON d.id=u.department_id LEFT JOIN roles r ON r.id=u.role_id
-      WHERE u.status NOT IN('DISABLED')
-      ORDER BY actual_revenue DESC,expected_revenue DESC,completed_tasks DESC,u.first_name,u.last_name LIMIT 20`),
-    this.db.query(`SELECT d.id,d.name,COUNT(DISTINCT u.id) FILTER(WHERE u.status='ACTIVE')::int staff_count,
+      WHERE u.status::text<>'DISABLED'
+      ORDER BY actual_revenue DESC,expected_revenue DESC,completed_tasks DESC,u.first_name,u.last_name LIMIT 20`,[]),
+    q('departments',`SELECT d.id,d.name,COUNT(DISTINCT u.id) FILTER(WHERE u.status::text='ACTIVE')::int staff_count,
       COUNT(DISTINCT l.id) FILTER(WHERE l.record_type='LEAD')::int leads,
       COUNT(DISTINCT l.id) FILTER(WHERE l.record_type='PROSPECT')::int prospects,
       COUNT(DISTINCT l.id) FILTER(WHERE l.record_type='CLIENT')::int clients,
-      COUNT(DISTINCT t.id) FILTER(WHERE t.status='COMPLETED')::int completed_tasks,
-      COUNT(DISTINCT t.id) FILTER(WHERE t.due_at<NOW() AND t.status NOT IN('COMPLETED','CANCELLED'))::int overdue_tasks
+      COUNT(DISTINCT t.id) FILTER(WHERE t.status::text='COMPLETED')::int completed_tasks,
+      COUNT(DISTINCT t.id) FILTER(WHERE t.due_at<NOW() AND t.status::text NOT IN('COMPLETED','CANCELLED'))::int overdue_tasks
       FROM departments d LEFT JOIN users u ON u.department_id=d.id
       LEFT JOIN leads l ON l.assigned_to_id=u.id LEFT JOIN tasks t ON t.assigned_department_id=d.id OR t.assigned_to_id=u.id
-      WHERE d.is_active=TRUE GROUP BY d.id ORDER BY completed_tasks DESC,d.name`),
-    this.db.query(`SELECT t.id,t.name,COUNT(DISTINCT tm.user_id)::int member_count,
+      WHERE COALESCE(d.is_active,TRUE)=TRUE GROUP BY d.id ORDER BY completed_tasks DESC,d.name`,[]),
+    q('teams',`SELECT t.id,t.name,COUNT(DISTINCT tm.user_id)::int member_count,
       COUNT(DISTINCT l.id) FILTER(WHERE l.record_type='LEAD')::int leads,
       COUNT(DISTINCT l.id) FILTER(WHERE l.record_type='PROSPECT')::int prospects,
       COUNT(DISTINCT l.id) FILTER(WHERE l.record_type='CLIENT')::int clients,
-      COUNT(DISTINCT task.id) FILTER(WHERE task.status='COMPLETED')::int completed_tasks,
-      COUNT(DISTINCT task.id) FILTER(WHERE task.due_at<NOW() AND task.status NOT IN('COMPLETED','CANCELLED'))::int overdue_tasks
+      COUNT(DISTINCT task.id) FILTER(WHERE task.status::text='COMPLETED')::int completed_tasks,
+      COUNT(DISTINCT task.id) FILTER(WHERE task.due_at<NOW() AND task.status::text NOT IN('COMPLETED','CANCELLED'))::int overdue_tasks
       FROM teams t LEFT JOIN team_members tm ON tm.team_id=t.id
       LEFT JOIN leads l ON l.assigned_team_id=t.id LEFT JOIN tasks task ON task.assigned_team_id=t.id
-      WHERE t.is_active=TRUE GROUP BY t.id,t.name ORDER BY completed_tasks DESC,t.name`),
-    this.db.query(`SELECT stage::text label,COUNT(*)::int count FROM leads WHERE record_type='LEAD' GROUP BY stage ORDER BY count DESC`),
-    this.db.query(`SELECT COALESCE(NULLIF(TRIM(source),''),'Unknown') label,COUNT(*)::int count FROM leads WHERE record_type='LEAD' GROUP BY 1 ORDER BY count DESC,label LIMIT 10`),
-    this.db.query(`SELECT COALESCE(NULLIF(TRIM(o.industry),''),'Unknown') label,COUNT(*)::int count FROM leads l JOIN organizations o ON o.id=l.organization_id GROUP BY 1 ORDER BY count DESC,label LIMIT 10`),
-    this.db.query(`SELECT record_type::text label,CASE WHEN record_type='PROSPECT' THEN COALESCE(SUM(expected_revenue),0)::float ELSE COALESCE(SUM(actual_revenue),0)::float END revenue FROM leads WHERE record_type IN('PROSPECT','CLIENT') GROUP BY record_type ORDER BY record_type`),
-    this.db.query(`SELECT status::text label,COUNT(*)::int count FROM tasks GROUP BY status ORDER BY count DESC`),
-    this.db.query(`SELECT priority::text label,COUNT(*)::int count FROM tasks GROUP BY priority ORDER BY count DESC`),
-    this.db.query(`WITH months AS (SELECT generate_series(date_trunc('month',CURRENT_DATE)-interval '5 months',date_trunc('month',CURRENT_DATE),interval '1 month') month)
+      WHERE COALESCE(t.is_active,TRUE)=TRUE GROUP BY t.id,t.name ORDER BY completed_tasks DESC,t.name`,[]),
+    q('stages',`SELECT stage::text label,COUNT(*)::int count FROM leads WHERE record_type='LEAD' GROUP BY stage ORDER BY count DESC`,[]),
+    q('sources',`SELECT COALESCE(NULLIF(TRIM(source),''),'Unknown') label,COUNT(*)::int count FROM leads WHERE record_type='LEAD' GROUP BY 1 ORDER BY count DESC,label LIMIT 10`,[]),
+    q('industries',`SELECT COALESCE(NULLIF(TRIM(o.industry),''),'Unknown') label,COUNT(*)::int count FROM leads l JOIN organizations o ON o.id=l.organization_id GROUP BY 1 ORDER BY count DESC,label LIMIT 10`,[]),
+    q('commercial',`SELECT record_type::text label,CASE WHEN record_type='PROSPECT' THEN COALESCE(SUM(expected_revenue),0)::float ELSE COALESCE(SUM(actual_revenue),0)::float END revenue FROM leads WHERE record_type IN('PROSPECT','CLIENT') GROUP BY record_type ORDER BY record_type`,[]),
+    q('task-statuses',`SELECT status::text label,COUNT(*)::int count FROM tasks GROUP BY status ORDER BY count DESC`,[]),
+    q('task-priorities',`SELECT priority::text label,COUNT(*)::int count FROM tasks GROUP BY priority ORDER BY count DESC`,[]),
+    q('trends',`WITH months AS (SELECT generate_series(date_trunc('month',CURRENT_DATE)-interval '5 months',date_trunc('month',CURRENT_DATE),interval '1 month') month)
       SELECT to_char(m.month,'Mon YY') label,
       COALESCE((SELECT COUNT(*) FROM leads l WHERE l.created_at>=m.month AND l.created_at<m.month+interval '1 month' AND l.record_type='LEAD'),0)::int leads,
       COALESCE((SELECT COUNT(*) FROM leads l WHERE l.updated_at>=m.month AND l.updated_at<m.month+interval '1 month' AND l.record_type='PROSPECT'),0)::int prospects,
       COALESCE((SELECT COUNT(*) FROM leads l WHERE l.updated_at>=m.month AND l.updated_at<m.month+interval '1 month' AND l.record_type='CLIENT'),0)::int clients,
-      COALESCE((SELECT COUNT(*) FROM tasks t WHERE t.updated_at>=m.month AND t.updated_at<m.month+interval '1 month' AND t.status='COMPLETED'),0)::int completed_tasks
-      FROM months m ORDER BY m.month`),
+      COALESCE((SELECT COUNT(*) FROM tasks t WHERE t.updated_at>=m.month AND t.updated_at<m.month+interval '1 month' AND t.status::text='COMPLETED'),0)::int completed_tasks
+      FROM months m ORDER BY m.month`,[]),
   ]);
   return{
     revenue:revenue.rows[0],crm:crm.rows[0],tasks:tasks.rows[0],followups:followups.rows[0],communications:communications.rows[0],workforce:workforce.rows[0],
     staff:staff.rows,departments:departments.rows,teams:teams.rows,stages:stages.rows,sources:sources.rows,industries:industries.rows,commercial:commercial.rows,
     taskStatuses:taskStatuses.rows,taskPriorities:taskPriorities.rows,trends:trends.rows,
   };
+ }
+ private async analyticsQuery<T extends Record<string,any>>(label:string,sql:string,fallback:T[]){
+  try{return await this.db.query<T>(sql)}catch(error){
+   const message=error instanceof Error?error.message:String(error);
+   this.logger.error(`Analytics section "${label}" failed: ${message}`);
+   return {rows:fallback} as any;
+  }
  }
 
  async sharedFolders(userId:string,admin:boolean){
