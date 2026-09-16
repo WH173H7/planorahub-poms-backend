@@ -43,6 +43,73 @@ const pretty = (value: unknown) => {
   }
 };
 
+const looksLikeIsoDate = (value: string) =>
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(value) && !Number.isNaN(Date.parse(value));
+
+const auditValue = (value: unknown): string => {
+  if (value == null || value === '') return 'Not set';
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (typeof value === 'number') return value.toLocaleString();
+  if (typeof value === 'string') return looksLikeIsoDate(value) ? fmt(value) : value;
+  if (Array.isArray(value)) {
+    if (!value.length) return 'None';
+    if (value.every((item) => ['string', 'number', 'boolean'].includes(typeof item))) return value.join(', ');
+    return `${value.length} item${value.length === 1 ? '' : 's'}`;
+  }
+  return 'Updated record';
+};
+
+const flattenAuditContext = (
+  value: unknown,
+  prefix = '',
+  depth = 0,
+): Array<{ label: string; value: string }> => {
+  if (value == null) return [];
+  if (depth > 2 || typeof value !== 'object' || Array.isArray(value)) {
+    return [{ label: prefix || 'Value', value: auditValue(value) }];
+  }
+
+  return Object.entries(value as Record<string, unknown>).flatMap(([key, nested]) => {
+    const label = prefix ? `${prefix} · ${human(key)}` : human(key);
+    if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+      return flattenAuditContext(nested, label, depth + 1);
+    }
+    return [{ label, value: auditValue(nested) }];
+  });
+};
+
+function AuditContext({ before, after }: { before: unknown; after: unknown }) {
+  const groups = [
+    { title: 'Before', value: before },
+    { title: 'After / context', value: after },
+  ].filter((group) => group.value != null);
+
+  return (
+    <div className="audit-context-stack">
+      {groups.map((group) => {
+        const entries = flattenAuditContext(group.value);
+        return (
+          <section className="audit-context-panel" key={group.title}>
+            <div className="audit-context-title">{group.title}</div>
+            {entries.length ? (
+              <div className="audit-context-grid">
+                {entries.map((entry, index) => (
+                  <div className="audit-context-row" key={`${entry.label}-${index}`}>
+                    <span>{entry.label}</span>
+                    <strong>{entry.value}</strong>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="audit-context-empty">No additional details.</div>
+            )}
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
 export function AuditView() {
   const [rows, setRows] = useState<AuditItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -202,8 +269,7 @@ export function AuditView() {
                         {(item.old_values || item.new_values) ? (
                           <details className="audit-detail-disclosure">
                             <summary>View change</summary>
-                            {item.old_values ? <pre>Before\n{pretty(item.old_values)}</pre> : null}
-                            {item.new_values ? <pre>After / context\n{pretty(item.new_values)}</pre> : null}
+                            <AuditContext before={item.old_values} after={item.new_values} />
                           </details>
                         ) : null}
                       </td>
@@ -240,8 +306,7 @@ export function AuditView() {
                 {(item.old_values || item.new_values) ? (
                   <details className="audit-detail-disclosure">
                     <summary>View audit context</summary>
-                    {item.old_values ? <pre>Before\n{pretty(item.old_values)}</pre> : null}
-                    {item.new_values ? <pre>After / context\n{pretty(item.new_values)}</pre> : null}
+                    <AuditContext before={item.old_values} after={item.new_values} />
                   </details>
                 ) : null}
               </article>
