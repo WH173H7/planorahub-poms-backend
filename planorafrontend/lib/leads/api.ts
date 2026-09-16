@@ -8,6 +8,7 @@ export async function listLeads(): Promise<Lead[]> {
 
 export async function publishLeadsToPool(leadIds:string[]):Promise<{count:number;leadIds:string[]}>{return(await apiFetch<ApiResponse<{count:number;leadIds:string[]}>>('/admin/leads/pool/publish',{method:'POST',body:JSON.stringify({leadIds})})).data;}
 export async function removeLeadFromPool(id:string):Promise<Lead>{return(await apiFetch<ApiResponse<Lead>>(`/admin/leads/${id}/pool/remove`,{method:'POST'})).data;}
+export async function deleteLead(id:string):Promise<void>{await apiFetch(`/admin/leads/${id}`,{method:'DELETE'});}
 
 export async function createOrganizationLead(input: CreateOrganizationLeadInput): Promise<Lead> {
   return (await apiFetch<ApiResponse<Lead>>('/admin/leads/organization', {

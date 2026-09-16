@@ -1,5 +1,7 @@
 'use client';
 
+import Image from 'next/image';
+import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { Avatar } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
@@ -8,6 +10,7 @@ import { GlobalSearch } from '@/components/shell/global-search';
 import { supabase } from '@/lib/supabase/client';
 import type { CrmUser } from '@/types/auth';
 import { NotificationCenter } from '@/components/workspace-ops/notification-center';
+import { routeForUser } from '@/lib/auth/routing';
 
 export function AppTopbar({
   user,
@@ -46,10 +49,9 @@ export function AppTopbar({
         >
           <Icon name="menu" />
         </Button>
-        <div className="topbar-context">
-          <strong>{title}</strong>
-          <span>PlanoraHub CRM</span>
-        </div>
+        <Link href={routeForUser(user)} className="topbar-brand-link" aria-label={`PlanoraHub home · ${title}`}>
+          <Image src="/planorahub.png" alt="PlanoraHub" width={132} height={62} priority className="topbar-brand-logo" />
+        </Link>
       </div>
 
       <div className="topbar-actions">

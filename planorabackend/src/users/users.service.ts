@@ -133,6 +133,45 @@ export class UsersService {
     return this.getStaff(id);
   }
 
+  async deleteStaff(id:string,reassignToId:string|null,ctx?:Ctx){
+    const current=await this.requireStaff(id);
+    if(ctx?.actorUserId===id) throw new BadRequestException('You cannot delete the account you are currently signed in with.');
+
+    const role=await this.usersRepository.getRole(current.role_id);
+    if(role?.code==='SUPER_ADMIN') await this.protectLastSuperAdmin();
+
+    const dependencies=await this.usersRepository.getStaffDeletionDependencies(id);
+    const linkedWork=Object.values(dependencies).some((value)=>Number(value)>0);
+    let replacementId=reassignToId?.trim()||null;
+
+    if(linkedWork && !replacementId){
+      throw new BadRequestException('This staff member still owns CRM work. Select an active staff member to receive their linked work before deletion.');
+    }
+    if(replacementId){
+      if(replacementId===id) throw new BadRequestException('Select a different staff member for reassignment.');
+      if(!(await this.usersRepository.isActiveStaff(replacementId))) throw new BadRequestException('The reassignment staff member must be an active account.');
+    }
+
+    if(current.auth_user_id){
+      const {error}=await this.supabase.admin.auth.admin.deleteUser(current.auth_user_id);
+      if(error) throw new BadRequestException(this.authAdminError(error.message));
+    }
+
+    await this.usersRepository.deleteStaffUser(id,replacementId);
+    await this.audit.log({
+      actorUserId:ctx?.actorUserId,
+      action:'STAFF_DELETED',
+      module:'users',
+      entityType:'user',
+      entityId:id,
+      oldValues:{firstName:current.first_name,lastName:current.last_name,email:current.email,status:current.status,dependencies},
+      newValues:{reassignedToId:replacementId},
+      ipAddress:ctx?.ipAddress,
+      userAgent:ctx?.userAgent,
+    });
+    return {id,reassignedToId:replacementId};
+  }
+
   async resetPassword(id:string,sendEmail:boolean,ctx?:Ctx){
     const staff=await this.requireStaff(id);
     if(!staff.auth_user_id) throw new BadRequestException('This staff account has no authentication account');

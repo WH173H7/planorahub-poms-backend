@@ -1,6 +1,6 @@
 'use client';
 
-import Image from 'next/image';
+import Link from 'next/link';
 import {useEffect,useMemo,useState} from 'react';
 import {NavSection} from '@/components/navigation/nav-section';
 import type {NavigationSection} from '@/components/navigation/navigation.types';
@@ -11,6 +11,7 @@ type AppSidebarProps={navigation:NavigationSection[];path:string;collapsed:boole
 
 export function AppSidebar({navigation,path,collapsed,onNavigate,onToggleCollapsed,mobile=false}:AppSidebarProps){
   const compact=collapsed&&!mobile;
+  const homeHref=navigation.flatMap(section=>section.items).find(item=>item.href==='/dashboard'||item.href==='/home')?.href??'/';
   const[pendingLetters,setPendingLetters]=useState(0);
 
   useEffect(()=>{
@@ -27,7 +28,9 @@ export function AppSidebar({navigation,path,collapsed,onNavigate,onToggleCollaps
 
   return <aside className="sidebar" aria-label="Application navigation">
     <div className="sidebar-brand">
-      {compact?<span className="brand-mark" aria-label="PlanoraHub">P</span>:<div className="sidebar-brand-logo" aria-label="PlanoraHub CRM"><Image src="/planorahub.png" alt="PlanoraHub CRM" width={104} height={59} priority/></div>}
+      <Link href={homeHref} className={compact?'sidebar-home-link is-compact':'sidebar-home-link'} aria-label="Go to home" title="Home" onClick={onNavigate}>
+        <Icon name="home" width={21} height={21}/>
+      </Link>
       {mobile?<button className="mobile-close" type="button" aria-label="Close navigation" onClick={onNavigate}><Icon name="close"/></button>:null}
     </div>
     <nav className="sidebar-nav">{decorated.map(section=><NavSection key={section.label} section={section} path={path} collapsed={collapsed} onNavigate={onNavigate}/>)}</nav>

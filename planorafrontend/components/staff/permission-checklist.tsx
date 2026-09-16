@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { Permission } from '@/lib/staff/api';
 
 export function PermissionChecklist({
@@ -16,6 +16,7 @@ export function PermissionChecklist({
 }) {
   const [query, setQuery] = useState('');
   const [selectedOnly, setSelectedOnly] = useState(false);
+  const [openModules, setOpenModules] = useState<Record<string, boolean>>({});
   const selected = useMemo(() => new Set(selectedIds), [selectedIds]);
   const needle = query.trim().toLowerCase();
 
@@ -44,19 +45,36 @@ export function PermissionChecklist({
       }));
   }, [permissions, needle, selectedOnly, selected]);
 
+  useEffect(() => {
+    if (!groups.length) return;
+    setOpenModules((current) => {
+      if (Object.keys(current).length) return current;
+      return { [groups[0].module]: true };
+    });
+  }, [groups]);
+
+  useEffect(() => {
+    if (!needle && !selectedOnly) return;
+    setOpenModules((current) => {
+      const next = { ...current };
+      groups.forEach((group) => { next[group.module] = true; });
+      return next;
+    });
+  }, [needle, selectedOnly, groups]);
+
   const visibleCount = groups.reduce((total, group) => total + group.items.length, 0);
   const totalModules = new Set(permissions.map((permission) => permission.module?.trim() || 'general')).size;
 
   return (
-    <div className="permission-browser-v3">
-      <div className="permission-browser-v3__summary">
+    <div className="permission-browser-v4">
+      <div className="permission-browser-v4__summary">
         <div><span>Available</span><strong>{permissions.length}</strong><small>permissions</small></div>
         <div><span>Selected</span><strong>{selectedIds.length}</strong><small>effective access</small></div>
         <div><span>Modules</span><strong>{totalModules}</strong><small>access areas</small></div>
       </div>
 
-      <div className="permission-browser-v3__toolbar">
-        <div className="permission-browser-v3__search">
+      <div className="permission-browser-v4__toolbar">
+        <label className="permission-browser-v4__search">
           <span aria-hidden="true">⌕</span>
           <input
             value={query}
@@ -64,10 +82,10 @@ export function PermissionChecklist({
             placeholder="Search permissions, modules or access codes…"
             aria-label="Search permissions"
           />
-        </div>
+        </label>
         <button
           type="button"
-          className={selectedOnly ? 'permission-browser-v3__filter is-active' : 'permission-browser-v3__filter'}
+          className={selectedOnly ? 'permission-browser-v4__filter is-active' : 'permission-browser-v4__filter'}
           onClick={() => setSelectedOnly((value) => !value)}
           aria-pressed={selectedOnly}
         >
@@ -75,70 +93,76 @@ export function PermissionChecklist({
         </button>
       </div>
 
-      <div className="permission-browser-v3__meta">
+      <div className="permission-browser-v4__meta">
         <span>{visibleCount} permission{visibleCount === 1 ? '' : 's'} shown</span>
-        <span>Expand a module to review access.</span>
+        <span>Open a module to review its access.</span>
       </div>
 
-      <div className="permission-browser-v3__groups">
-        {groups.map(({ module, items }, index) => {
+      <div className="permission-browser-v4__groups">
+        {groups.map(({ module, items }) => {
           const selectedInGroup = items.filter((item) => selected.has(item.id)).length;
           const allSelected = items.length > 0 && selectedInGroup === items.length;
-          const shouldOpen = Boolean(needle) || selectedOnly || index === 0;
+          const isOpen = Boolean(openModules[module]);
+          const pct = items.length ? Math.round((selectedInGroup / items.length) * 100) : 0;
 
           return (
-            <details className="permission-module-v3" key={module} open={shouldOpen ? true : undefined}>
-              <summary>
-                <span className="permission-module-v3__icon" aria-hidden="true">›</span>
-                <span className="permission-module-v3__title">
-                  <strong>{human(module)}</strong>
-                  <small>{selectedInGroup} of {items.length} selected</small>
-                </span>
-                <span className="permission-module-v3__meter" aria-hidden="true"><i style={{ width: `${items.length ? Math.round((selectedInGroup / items.length) * 100) : 0}%` }} /></span>
+            <section className={isOpen ? 'permission-module-v4 is-open' : 'permission-module-v4'} key={module}>
+              <div className="permission-module-v4__head">
+                <button
+                  type="button"
+                  className="permission-module-v4__toggle"
+                  onClick={() => setOpenModules((current) => ({ ...current, [module]: !isOpen }))}
+                  aria-expanded={isOpen}
+                >
+                  <span className="permission-module-v4__chevron" aria-hidden="true">›</span>
+                  <span className="permission-module-v4__title">
+                    <strong>{human(module)}</strong>
+                    <small>{selectedInGroup} of {items.length} selected</small>
+                  </span>
+                  <span className="permission-module-v4__meter" aria-hidden="true"><i style={{ width: `${pct}%` }} /></span>
+                </button>
                 {!readOnly && onToggle ? (
                   <button
                     type="button"
-                    className="permission-module-v3__bulk"
-                    onClick={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      items.forEach((item) => onToggle(item.id, !allSelected));
-                    }}
+                    className="permission-module-v4__bulk"
+                    onClick={() => items.forEach((item) => onToggle(item.id, !allSelected))}
                   >
-                    {allSelected ? 'Clear' : 'Select all'}
+                    {allSelected ? 'Clear module' : 'Select all'}
                   </button>
                 ) : null}
-              </summary>
-
-              <div className="permission-module-v3__list">
-                {items.map((permission) => {
-                  const checked = selected.has(permission.id);
-                  return (
-                    <label key={permission.id} className={checked ? 'permission-option-v3 is-selected' : 'permission-option-v3'}>
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        disabled={readOnly}
-                        onChange={(event) => onToggle?.(permission.id, event.target.checked)}
-                      />
-                      <span className="permission-option-v3__copy">
-                        <strong>{permissionLabel(permission)}</strong>
-                        <small>{permission.description?.trim() || fallbackDescription(permission)}</small>
-                      </span>
-                      <code>{permission.code || 'permission'}</code>
-                    </label>
-                  );
-                })}
               </div>
-            </details>
+
+              {isOpen ? (
+                <div className="permission-module-v4__list">
+                  {items.map((permission) => {
+                    const checked = selected.has(permission.id);
+                    return (
+                      <label key={permission.id} className={checked ? 'permission-option-v4 is-selected' : 'permission-option-v4'}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={readOnly}
+                          onChange={(event) => onToggle?.(permission.id, event.target.checked)}
+                        />
+                        <span className="permission-option-v4__copy">
+                          <strong>{permissionLabel(permission)}</strong>
+                          <small>{permission.description?.trim() || fallbackDescription(permission)}</small>
+                        </span>
+                        <code>{permission.code || 'permission'}</code>
+                      </label>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </section>
           );
         })}
       </div>
 
       {!visibleCount ? (
-        <div className="permission-browser-v3__empty">
+        <div className="permission-browser-v4__empty">
           <strong>{selectedOnly ? 'No selected permissions match this view.' : 'No permissions match your search.'}</strong>
-          <span>{selectedOnly ? 'Turn off “Selected only” to see the complete access catalogue.' : 'Try another permission or module name.'}</span>
+          <span>{selectedOnly ? 'Turn off “Selected only” to see the full access catalogue.' : 'Try another permission, module or access code.'}</span>
         </div>
       ) : null}
     </div>

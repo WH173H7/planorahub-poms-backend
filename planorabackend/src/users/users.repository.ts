@@ -49,7 +49,7 @@ export class UsersRepository {
     const staff=s.rows[0];
     if(!staff) return null;
 
-    const [teams, overrides, rolePerms, audit] = await Promise.all([
+    const [teams, overrides, rolePerms, audit, leadLinks, taskLinks, followupLinks, mailLinks, letterLinks, fileLinks] = await Promise.all([
       this.db.query(
         `SELECT t.id,t.name,t.department_id,d.name AS department_name
          FROM team_members tm
@@ -102,7 +102,36 @@ export class UsersRepository {
          LIMIT 100`,
         [id],
       ),
+      this.db.query(
+        `SELECT record_type,COUNT(*)::int AS count
+         FROM leads
+         WHERE assigned_to_id=$1
+         GROUP BY record_type`,
+        [id],
+      ).catch(()=>({rows:[]} as any)),
+      this.db.query(
+        `SELECT COUNT(*)::int AS count FROM tasks WHERE assigned_to_id=$1 OR accepted_by_id=$1`,
+        [id],
+      ).catch(()=>({rows:[{count:0}]} as any)),
+      this.db.query(
+        `SELECT COUNT(*)::int AS count FROM activities WHERE assigned_to_id=$1`,
+        [id],
+      ).catch(()=>({rows:[{count:0}]} as any)),
+      this.db.query(
+        `SELECT COUNT(*)::int AS count FROM crm_mail_threads WHERE created_by_id=$1`,
+        [id],
+      ).catch(()=>({rows:[{count:0}]} as any)),
+      this.db.query(
+        `SELECT COUNT(*)::int AS count FROM letter_documents WHERE created_by_id=$1`,
+        [id],
+      ).catch(()=>({rows:[{count:0}]} as any)),
+      this.db.query(
+        `SELECT COUNT(*)::int AS count FROM shared_files WHERE created_by_id=$1`,
+        [id],
+      ).catch(()=>({rows:[{count:0}]} as any)),
     ]);
+
+    const crmCounts=Object.fromEntries(leadLinks.rows.map((row:any)=>[String(row.record_type||'LEAD'),Number(row.count||0)]));
 
     return {
       ...staff,
@@ -110,6 +139,16 @@ export class UsersRepository {
       permission_overrides:overrides.rows,
       role_permissions:rolePerms.rows,
       audit_events:audit.rows,
+      connections:{
+        leads:Number(crmCounts.LEAD||0),
+        prospects:Number(crmCounts.PROSPECT||0),
+        clients:Number(crmCounts.CLIENT||0),
+        tasks:Number(taskLinks.rows[0]?.count||0),
+        followups:Number(followupLinks.rows[0]?.count||0),
+        mail_threads:Number(mailLinks.rows[0]?.count||0),
+        letters:Number(letterLinks.rows[0]?.count||0),
+        shared_files:Number(fileLinks.rows[0]?.count||0),
+      },
     };
   }
 
@@ -248,7 +287,80 @@ export class UsersRepository {
     return Number(r.rows[0]?.count??0);
   }
 
+  async isActiveStaff(id:string){
+    const r=await this.db.query(`SELECT 1 FROM users WHERE id=$1 AND status='ACTIVE' LIMIT 1`,[id]);
+    return r.rowCount===1;
+  }
+
+  async getStaffDeletionDependencies(id:string){
+    const r=await this.db.query(`
+      SELECT
+        (SELECT COUNT(*)::int FROM leads WHERE assigned_to_id=$1) AS leads,
+        (SELECT COUNT(*)::int FROM tasks WHERE assigned_to_id=$1) AS tasks,
+        (SELECT COUNT(*)::int FROM activities WHERE assigned_to_id=$1) AS followups,
+        (SELECT COUNT(*)::int FROM lead_assignment_batches WHERE assigned_to_id=$1) AS assignment_batches,
+        (SELECT COUNT(*)::int FROM organizations WHERE assigned_owner_id=$1) AS organizations,
+        (SELECT COUNT(*)::int FROM crm_mail_threads WHERE created_by_id=$1) AS mail_threads,
+        (SELECT COUNT(*)::int FROM letter_documents WHERE created_by_id=$1 OR updated_by_id=$1) AS letters,
+        (SELECT COUNT(*)::int FROM shared_files WHERE created_by_id=$1) AS shared_files,
+        (SELECT COUNT(*)::int FROM shared_folders WHERE created_by_id=$1) AS shared_folders,
+        (SELECT COUNT(*)::int FROM crm_mail_drafts WHERE created_by_id=$1) AS mail_drafts
+    `,[id]);
+    return r.rows[0]??{};
+  }
+
+  async deleteStaffUser(id:string,reassignToId:string|null){
+    const client=await this.db.getClient();
+    try{
+      await client.query('BEGIN');
+      if(reassignToId){
+        await client.query(`UPDATE leads SET assigned_to_id=$2,updated_at=NOW() WHERE assigned_to_id=$1`,[id,reassignToId]);
+        await client.query(`UPDATE tasks SET assigned_to_id=$2,updated_at=NOW() WHERE assigned_to_id=$1`,[id,reassignToId]);
+        await client.query(`UPDATE activities SET assigned_to_id=$2,updated_at=NOW() WHERE assigned_to_id=$1`,[id,reassignToId]);
+        await client.query(`UPDATE lead_assignment_batches SET assigned_to_id=$2,updated_at=NOW() WHERE assigned_to_id=$1`,[id,reassignToId]);
+        await client.query(`UPDATE organizations SET assigned_owner_id=$2,updated_at=NOW() WHERE assigned_owner_id=$1`,[id,reassignToId]);
+        await client.query(`UPDATE crm_mail_threads SET created_by_id=$2,updated_at=NOW() WHERE created_by_id=$1`,[id,reassignToId]);
+        await client.query(`UPDATE letter_documents SET created_by_id=CASE WHEN created_by_id=$1 THEN $2 ELSE created_by_id END,updated_by_id=CASE WHEN updated_by_id=$1 THEN $2 ELSE updated_by_id END,updated_at=NOW() WHERE created_by_id=$1 OR updated_by_id=$1`,[id,reassignToId]);
+        await client.query(`UPDATE shared_files SET created_by_id=$2 WHERE created_by_id=$1`,[id,reassignToId]);
+        await client.query(`UPDATE shared_folders SET created_by_id=$2,updated_at=NOW() WHERE created_by_id=$1`,[id,reassignToId]);
+        await client.query(`UPDATE crm_mail_drafts SET created_by_id=$2,updated_at=NOW() WHERE created_by_id=$1`,[id,reassignToId]);
+      }
+      await client.query(`UPDATE users SET created_by_id=NULL WHERE created_by_id=$1`,[id]);
+      await client.query(`UPDATE teams SET manager_id=NULL WHERE manager_id=$1`,[id]);
+      await client.query(`UPDATE user_permission_overrides SET granted_by_id=NULL WHERE granted_by_id=$1`,[id]);
+      await client.query(`DELETE FROM users WHERE id=$1`,[id]);
+      await client.query('COMMIT');
+    }catch(error){
+      await client.query('ROLLBACK');
+      throw error;
+    }finally{
+      client.release();
+    }
+  }
+
   async deleteInternalUser(id:string){
     await this.db.query(`DELETE FROM users WHERE id=$1`,[id]);
+  }
+
+  async deleteInvitedUser(id:string){
+    const client=await this.db.getClient();
+    try{
+      await client.query('BEGIN');
+      await client.query(`UPDATE users SET created_by_id=NULL WHERE created_by_id=$1`,[id]);
+      await client.query(`UPDATE teams SET manager_id=NULL WHERE manager_id=$1`,[id]);
+      await client.query(`UPDATE user_permission_overrides SET granted_by_id=NULL WHERE granted_by_id=$1`,[id]);
+      await client.query(`DELETE FROM lead_assignment_batches WHERE assigned_to_id=$1`,[id]);
+      await client.query(`UPDATE leads
+        SET stage=CASE WHEN assigned_to_id=$1 AND assigned_team_id IS NULL AND stage='ASSIGNED' THEN 'NEW' ELSE stage END,
+            updated_at=NOW()
+        WHERE assigned_to_id=$1`,[id]);
+      await client.query(`DELETE FROM users WHERE id=$1`,[id]);
+      await client.query('COMMIT');
+    }catch(error){
+      await client.query('ROLLBACK');
+      throw error;
+    }finally{
+      client.release();
+    }
   }
 }

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Headers, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Headers, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { AuthGuard, type AuthenticatedRequest } from '../auth/auth.guard.js';
 import { RequirePermission } from '../auth/require-permission.decorator.js';
 import { PermissionGuard } from '../permissions/permission.guard.js';
@@ -46,6 +46,17 @@ export class UsersController {
   @RequirePermission('users.update.all')
   async reactivateStaff(@Param('id') id: string, @Req() req: AuthenticatedRequest, @Headers('user-agent') ua?: string) {
     return { success: true, message: 'Staff account reactivated', data: await this.usersService.setStaffStatus(id, 'ACTIVE', this.ctx(req, ua)) };
+  }
+
+  @Delete(':id')
+  @RequirePermission('users.disable')
+  async deleteStaff(
+    @Param('id') id: string,
+    @Body() body: { reassignToId?: string | null } | undefined,
+    @Req() req: AuthenticatedRequest,
+    @Headers('user-agent') ua?: string,
+  ) {
+    return { success: true, message: 'Staff account deleted', data: await this.usersService.deleteStaff(id, body?.reassignToId ?? null, this.ctx(req, ua)) };
   }
 
   @Post(':id/reset-password')

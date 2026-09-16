@@ -144,7 +144,7 @@ export function AppShell({
         path={path}
       />
 
-      <div className="app-main" onPointerDownCapture={collapseSidebarFromPageInteraction}>
+      <div className="app-main" onClick={collapseSidebarFromPageInteraction}>
         <AppTopbar
           user={user}
           title={title}

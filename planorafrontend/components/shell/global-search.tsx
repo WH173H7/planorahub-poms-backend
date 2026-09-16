@@ -2,8 +2,35 @@
 
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
-import { Icon } from '@/components/ui/icon';
+import { Icon, type IconName } from '@/components/ui/icon';
 import { crmSearch, type SearchResult } from '@/lib/workspace/ops-api';
+
+function searchKindIcon(kind: string): IconName {
+  switch (kind.toLowerCase()) {
+    case 'organization':
+      return 'organizations';
+    case 'lead':
+      return 'leads';
+    case 'contact':
+      return 'contacts';
+    case 'prospect':
+      return 'prospects';
+    case 'client':
+      return 'clients';
+    case 'task':
+      return 'tasks';
+    case 'staff':
+      return 'staff';
+    case 'file':
+      return 'file';
+    default:
+      return 'search';
+  }
+}
+
+function searchKindLabel(kind: string) {
+  return kind.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
 
 function SearchResults({
   rows,
@@ -14,25 +41,56 @@ function SearchResults({
   busy: boolean;
   onPick: () => void;
 }) {
-  if (busy) return <div className="global-search-state">Searching…</div>;
-  if (!rows.length) return <div className="global-search-state">No CRM records found.</div>;
+  if (busy) {
+    return (
+      <div className="global-search-state global-search-loading" role="status">
+        <span className="global-search-spinner" aria-hidden="true" />
+        <span>Searching PlanoraHub…</span>
+      </div>
+    );
+  }
+
+  if (!rows.length) {
+    return (
+      <div className="global-search-state global-search-empty">
+        <span className="global-search-empty-icon" aria-hidden="true"><Icon name="search" /></span>
+        <strong>No matching records</strong>
+        <span>Try a company, lead, contact, staff member or task name.</span>
+      </div>
+    );
+  }
 
   return (
     <div className="global-search-results">
-      {rows.map((result) => (
-        <Link
-          key={`${result.kind}-${result.id}`}
-          href={result.href}
-          className="global-search-result"
-          onClick={onPick}
-        >
-          <span className="global-search-kind">{result.kind}</span>
-          <span className="global-search-copy">
-            <strong>{result.title}</strong>
-            <small>{result.subtitle}</small>
-          </span>
-        </Link>
-      ))}
+      <div className="global-search-results-head">
+        <span>Search results</span>
+        <span>{rows.length} {rows.length === 1 ? 'result' : 'results'}</span>
+      </div>
+
+      <div className="global-search-results-list">
+        {rows.map((result) => (
+          <Link
+            key={`${result.kind}-${result.id}`}
+            href={result.href}
+            className="global-search-result"
+            onClick={onPick}
+          >
+            <span className="global-search-symbol" aria-hidden="true">
+              <Icon name={searchKindIcon(result.kind)} width={18} height={18} />
+            </span>
+
+            <span className="global-search-copy">
+              <span className="global-search-kind">{searchKindLabel(result.kind)}</span>
+              <strong>{result.title}</strong>
+              {result.subtitle ? <small>{result.subtitle}</small> : null}
+            </span>
+
+            <span className="global-search-open" aria-hidden="true">
+              <Icon name="chevron" width={16} height={16} />
+            </span>
+          </Link>
+        ))}
+      </div>
     </div>
   );
 }

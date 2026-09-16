@@ -671,4 +671,23 @@ export class LeadsRepository {
     return result.rows[0]??null;
   }
 
+  async deleteLead(id:string){
+    const client=await this.db.getClient();
+    try{
+      await client.query('BEGIN');
+      const batchRows=(await client.query(`SELECT DISTINCT batch_id FROM lead_assignment_batch_items WHERE lead_id=$1`,[id])).rows;
+      const result=await client.query(`DELETE FROM leads WHERE id=$1 AND record_type='LEAD'::lead_record_type RETURNING id,organization_id`,[id]);
+      for(const row of batchRows){
+        await client.query(`DELETE FROM lead_assignment_batches b WHERE b.id=$1 AND NOT EXISTS(SELECT 1 FROM lead_assignment_batch_items i WHERE i.batch_id=b.id)`,[row.batch_id]);
+      }
+      await client.query('COMMIT');
+      return result.rows[0]??null;
+    }catch(error){
+      await client.query('ROLLBACK');
+      throw error;
+    }finally{
+      client.release();
+    }
+  }
+
 }

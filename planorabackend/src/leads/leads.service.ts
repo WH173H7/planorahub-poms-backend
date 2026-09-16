@@ -243,6 +243,15 @@ export class LeadsService {
     return this.get(id);
   }
 
+  async deleteLead(id:string,context?:ActionContext){
+    const current=await this.get(id);
+    if(String(current.record_type||'LEAD')!=='LEAD') throw new BadRequestException('Only Lead-stage records can be permanently deleted from the Leads workspace.');
+    const deleted=await this.leads.deleteLead(id);
+    if(!deleted) throw new NotFoundException('Lead not found');
+    await this.audit.log({actorUserId:context?.actorUserId,action:'LEAD_DELETED',module:'leads',entityType:'lead',entityId:id,oldValues:{organizationId:current.organization_id,organizationName:current.organization_name,stage:current.stage,assignedToId:current.assigned_to_id},ipAddress:context?.ipAddress,userAgent:context?.userAgent});
+    return {id,organizationId:current.organization_id};
+  }
+
   async assign(id:string, body:Partial<AssignmentInput>, context?:ActionContext) {
     const current=await this.get(id); const assignedToId=body.assignedToId===undefined?current.assigned_to_id:this.clean(body.assignedToId);
     if(assignedToId && !(await this.leads.userExists(assignedToId))) throw new BadRequestException('Assigned staff member is invalid or unavailable');

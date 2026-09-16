@@ -60,6 +60,7 @@ export class LeadsController {
   @Post('organization') @RequirePermission('leads.create') async createOrganizationLead(@Body()body:Partial<OrganizationLeadInput>,@Req()request:AuthenticatedRequest,@Headers('user-agent')ua?:string){return{success:true,data:await this.leads.createOrganizationLead(body,this.context(request,ua))};}
   @Post() @RequirePermission('leads.create') async create(@Body()body:Partial<LeadInput>,@Req()request:AuthenticatedRequest,@Headers('user-agent')ua?:string){return{success:true,data:await this.leads.create(body,this.context(request,ua))};}
   @Patch(':id') @RequirePermission('leads.update.all') async update(@Param('id')id:string,@Body()body:Partial<LeadInput>,@Req()request:AuthenticatedRequest,@Headers('user-agent')ua?:string){return{success:true,data:await this.leads.update(id,body,this.context(request,ua))};}
+  @Delete(':id') @RequirePermission('leads.update.all') async deleteLead(@Param('id')id:string,@Req()request:AuthenticatedRequest,@Headers('user-agent')ua?:string){return{success:true,message:'Lead deleted',data:await this.leads.deleteLead(id,this.context(request,ua))};}
   @Post(':id/assignments') @RequirePermission('leads.assign') async assign(@Param('id')id:string,@Body()body:Partial<AssignmentInput>,@Req()request:AuthenticatedRequest,@Headers('user-agent')ua?:string){return{success:true,data:await this.leads.assign(id,body,this.context(request,ua))};}
   private context(request:AuthenticatedRequest,userAgent?:string){return{actorUserId:request.user!.id,ipAddress:request.ip,userAgent};}
 }

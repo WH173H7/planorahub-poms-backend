@@ -58,6 +58,13 @@ export async function createStaff(input: Record<string, unknown>) {
   })).data;
 }
 
+export async function deleteStaff(id: string, reassignToId?: string | null) {
+  return (await apiFetch<R<{ id: string; reassignedToId: string | null }>>(`/admin/staff/${id}`, {
+    method: 'DELETE',
+    body: JSON.stringify({ reassignToId: reassignToId || null }),
+  })).data;
+}
+
 export async function setStaffStatus(id: string, action: 'suspend' | 'disable' | 'reactivate') {
   return (await apiFetch<R<Staff>>(`/admin/staff/${id}/${action}`, { method: 'POST' })).data;
 }

@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { type ReactNode, useCallback, useEffect, useState } from 'react';
 import { AppShell } from '@/components/shell/app-shell';
 import { Alert } from '@/components/ui/alert';
@@ -8,6 +9,8 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
+import { Input } from '@/components/ui/input';
+import { Modal } from '@/components/ui/modal';
 import { PageErrorState, PageLoadingState } from '@/components/ui/page-state';
 import { Progress } from '@/components/ui/progress';
 import { approveProspect, rejectProspect } from '@/lib/delivery/api';
@@ -16,6 +19,7 @@ import {
   assignLeadToTeam,
   createAdminRequiredPursuitStep,
   deleteContact,
+  deleteLead,
   getLead,
   getLeadPursuit,
   listAssignmentHistory,
@@ -52,6 +56,7 @@ function routingLabel(lead: Lead) {
 }
 
 export function LeadWorkspace({ leadId }: { leadId: string }) {
+  const router = useRouter();
   const [lead, setLead] = useState<Lead | null>(null);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [pursuit, setPursuit] = useState<Pursuit | null>(null);
@@ -66,6 +71,7 @@ export function LeadWorkspace({ leadId }: { leadId: string }) {
   const [success, setSuccess] = useState<string | null>(null);
   const [reviewBusy, setReviewBusy] = useState(false);
   const [poolBusy, setPoolBusy] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   const refreshLead = useCallback(async () => {
     const record = await getLead(leadId);
@@ -134,6 +140,7 @@ export function LeadWorkspace({ leadId }: { leadId: string }) {
                 {lead.assigned_to_id ? 'Reassign Lead' : 'Assign Lead'}
               </Button>
             ) : null}
+            <Button size="sm" variant="danger" onClick={() => setDeleteOpen(true)}>Delete Lead</Button>
           </>}
         />
 
@@ -169,9 +176,17 @@ export function LeadWorkspace({ leadId }: { leadId: string }) {
 
         {contactOpen ? <ContactDialog key={editingContact?.id ?? 'new-contact'} open organizationId={lead.organization_id} contact={editingContact} onClose={() => { setContactOpen(false); setEditingContact(null); }} onSaved={async () => { setContacts(await listLeadContacts(lead.organization_id)); setContactOpen(false); setEditingContact(null); }} /> : null}
         {dialog==='reassign'?<ReassignLeadDialog currentOwnerId={lead.assigned_to_id} currentOwner={ownerName(lead)} onClose={()=>setDialog(null)} onConfirm={async(input)=>{await reassignLead(leadId,input);await refreshWorkspace();setDialog(null);setSuccess(lead.assigned_to_id?'Lead reassigned. Existing pursuit progress and history were preserved.':'Lead assigned. A pursuit workflow is now available to the owner.');}}/>:null}
+        {deleteOpen?<DeleteLeadDialog leadName={lead.organization_name} onClose={()=>setDeleteOpen(false)} onDelete={async()=>{await deleteLead(leadId);router.push('/leads');router.refresh();}}/>:null}
       </div>
     </AppShell>
   );
+}
+
+function DeleteLeadDialog({leadName,onClose,onDelete}:{leadName:string;onClose:()=>void;onDelete:()=>Promise<void>}) {
+  const [confirm,setConfirm]=useState('');
+  const [saving,setSaving]=useState(false);
+  const [error,setError]=useState<string|null>(null);
+  return <Modal open onClose={onClose} title="Delete Lead"><div className="stack"><div className="staff-delete-warning-v2"><strong>This permanently removes this Lead record.</strong><span>{leadName} will be removed from the Leads workspace. Lead pursuit/assignment records tied directly to it are cleaned up by the database, while the underlying organization remains available elsewhere in CRM.</span></div><Input label="Type DELETE to confirm" value={confirm} onChange={(event)=>setConfirm(event.target.value)} autoComplete="off"/>{error?<p className="task-form-error">{error}</p>:null}<div className="polish-actions"><Button variant="outline" onClick={onClose}>Cancel</Button><Button variant="danger" disabled={confirm!=='DELETE'||saving} loading={saving} onClick={async()=>{setSaving(true);setError(null);try{await onDelete()}catch(caught){setError(caught instanceof Error?caught.message:'Unable to delete Lead.');setSaving(false)}}}>Delete Lead</Button></div></div></Modal>;
 }
 
 function RecordHeader({ lead, actions }: { lead: Lead; actions?: ReactNode }) {
