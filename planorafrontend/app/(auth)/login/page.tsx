@@ -9,18 +9,32 @@ import { Input } from '@/components/ui/input';
 import { getCurrentCrmUser } from '@/lib/auth/current-user';
 import { apiFetch } from '@/lib/api/client';
 import { routeForUser } from '@/lib/auth/routing';
-import { supabase } from '@/lib/supabase/client';
+import {
+  getRememberedEmail,
+  getRememberMePreference,
+  setRememberedEmail,
+  setRememberMePreference,
+  supabase,
+} from '@/lib/supabase/client';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false);
   const [checkingSession, setCheckingSession] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
+
+    const remembered = getRememberMePreference();
+    setRememberMe(remembered);
+    if (remembered) {
+      const rememberedEmail = getRememberedEmail();
+      if (rememberedEmail) setEmail(rememberedEmail);
+    }
 
     async function checkExistingSession() {
       const { data } = await supabase.auth.getSession();
@@ -50,8 +64,11 @@ export default function LoginPage() {
     setSubmitting(true);
     setError(null);
 
+    const normalizedEmail = email.trim().toLowerCase();
+    setRememberMePreference(rememberMe);
+
     const { data, error: authError } = await supabase.auth.signInWithPassword({
-      email: email.trim().toLowerCase(),
+      email: normalizedEmail,
       password,
     });
 
@@ -64,6 +81,8 @@ export default function LoginPage() {
       setSubmitting(false);
       return;
     }
+
+    if (rememberMe) setRememberedEmail(normalizedEmail);
 
     try {
       await apiFetch('/auth/session-open', { method: 'POST' });
@@ -131,6 +150,19 @@ export default function LoginPage() {
                 {showPassword ? 'Hide' : 'Show'}
               </button>
             </div>
+
+            <label className="login-remember-row">
+              <input
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(event) => setRememberMe(event.target.checked)}
+                disabled={submitting}
+              />
+              <span>
+                <strong>Remember me</strong>
+                <small>Keep me signed in on this trusted device.</small>
+              </span>
+            </label>
 
             {error ? <Alert tone="error">{error}</Alert> : null}
 
