@@ -798,6 +798,7 @@ export class TasksService {
   async getAttachmentDownload(
     taskId: string,
     attachmentId: string,
+    context?: ActionContext,
   ) {
     await this.ensureTask(taskId);
 
@@ -836,6 +837,22 @@ export class TasksService {
         'Unable to create download link',
       );
     }
+
+    await this.audit.log({
+      actorUserId: context?.actorUserId,
+      action: 'TASK_ATTACHMENT_DOWNLOADED',
+      module: 'tasks',
+      entityType: 'task_attachment',
+      entityId: attachment.id,
+      newValues: {
+        taskId,
+        fileName: attachment.file_name,
+        mimeType: attachment.mime_type,
+        fileSize: attachment.file_size,
+      },
+      ipAddress: context?.ipAddress,
+      userAgent: context?.userAgent,
+    });
 
     return {
       attachmentId:

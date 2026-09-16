@@ -92,6 +92,8 @@ export class UsersService {
     if(teamIds && !(await this.usersRepository.teamsExist(teamIds))) throw new BadRequestException('One or more teams are invalid');
     if(input.permissionOverrides) await this.validateOverrides(input.permissionOverrides);
     if(input.directMessageUserIds) await this.validateDirectMessageTargets([...new Set(input.directMessageUserIds)]);
+    const beforeProfile=(teamIds!==undefined||input.permissionOverrides!==undefined)?await this.usersRepository.getStaffProfile(id):null;
+    const beforeDirect=input.directMessageUserIds!==undefined?await this.usersRepository.getDirectMessageAccess(id):null;
     const oldRole=await this.usersRepository.getRole(current.role_id);
     if(oldRole?.code==='SUPER_ADMIN' && role.code!=='SUPER_ADMIN') await this.protectLastSuperAdmin();
 
@@ -118,8 +120,8 @@ export class UsersService {
     if(input.permissionOverrides) await this.usersRepository.replacePermissionOverrides(id,input.permissionOverrides,ctx?.actorUserId);
     if(input.directMessageUserIds) await this.usersRepository.replaceDirectMessageAccess(id,[...new Set(input.directMessageUserIds)],ctx?.actorUserId);
     await this.audit.log({actorUserId:ctx?.actorUserId,action:'STAFF_UPDATED',module:'users',entityType:'user',entityId:id,
-      oldValues:{firstName:current.first_name,lastName:current.last_name,email:current.email,roleId:current.role_id,departmentId:current.department_id},
-      newValues:{firstName:updated.first_name,lastName:updated.last_name,email:updated.email,roleId:updated.role_id,departmentId:updated.department_id,...(teamIds?{teamIds}:{}),...(input.permissionOverrides?{permissionOverrides:input.permissionOverrides}:{}),...(input.directMessageUserIds?{directMessageUserIds:input.directMessageUserIds}:{})},
+      oldValues:{firstName:current.first_name,lastName:current.last_name,email:current.email,roleId:current.role_id,departmentId:current.department_id,...(teamIds!==undefined?{teamIds:(beforeProfile?.teams??[]).map((team:any)=>team.id)}:{}),...(input.permissionOverrides!==undefined?{permissionOverrides:(beforeProfile?.permission_overrides??[]).map((item:any)=>({permissionId:item.permission_id,effect:item.effect,reason:item.reason}))}:{}),...(input.directMessageUserIds!==undefined?{directMessageUserIds:beforeDirect?.selectedUserIds??[]}:{})},
+      newValues:{firstName:updated.first_name,lastName:updated.last_name,email:updated.email,roleId:updated.role_id,departmentId:updated.department_id,...(teamIds!==undefined?{teamIds}:{}),...(input.permissionOverrides!==undefined?{permissionOverrides:input.permissionOverrides}:{}),...(input.directMessageUserIds!==undefined?{directMessageUserIds:input.directMessageUserIds}:{})},
       ipAddress:ctx?.ipAddress,userAgent:ctx?.userAgent});
     return this.getStaff(id);
   }
@@ -216,11 +218,12 @@ export class UsersService {
 
   async setDirectMessageAccess(id:string,userIds:string[],ctx?:Ctx){
     await this.requireStaff(id);
+    const before=await this.usersRepository.getDirectMessageAccess(id);
     const unique=[...new Set(userIds??[])];
     if(unique.includes(id)) throw new BadRequestException('A staff member cannot be granted direct-message access to themselves');
     await this.validateDirectMessageTargets(unique);
     await this.usersRepository.replaceDirectMessageAccess(id,unique,ctx?.actorUserId);
-    await this.audit.log({actorUserId:ctx?.actorUserId,action:'STAFF_DIRECT_MESSAGE_ACCESS_UPDATED',module:'users',entityType:'user',entityId:id,newValues:{directMessageUserIds:unique},ipAddress:ctx?.ipAddress,userAgent:ctx?.userAgent});
+    await this.audit.log({actorUserId:ctx?.actorUserId,action:'STAFF_DIRECT_MESSAGE_ACCESS_UPDATED',module:'users',entityType:'user',entityId:id,oldValues:{directMessageUserIds:before?.selectedUserIds??[]},newValues:{directMessageUserIds:unique},ipAddress:ctx?.ipAddress,userAgent:ctx?.userAgent});
     return this.usersRepository.getDirectMessageAccess(id);
   }
 

@@ -3,13 +3,15 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
   Param,
   Patch,
   Post,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 
-import { AuthGuard } from '../auth/auth.guard.js';
+import { AuthGuard, type AuthenticatedRequest } from '../auth/auth.guard.js';
 import { RequirePermission } from '../auth/require-permission.decorator.js';
 import { PermissionGuard } from '../permissions/permission.guard.js';
 import { AdminDirectoryService } from './admin-directory.service.js';
@@ -44,10 +46,12 @@ export class AdminDirectoryController {
       description?: string;
       permissionIds?: string[];
     },
+    @Req() req: AuthenticatedRequest,
+    @Headers('user-agent') ua?: string,
   ) {
     return {
       success: true,
-      data: await this.directory.createRole(body),
+      data: await this.directory.createRole(body, this.ctx(req, ua)),
     };
   }
 
@@ -67,10 +71,12 @@ export class AdminDirectoryController {
   async deleteRole(
     @Param('id') id: string,
     @Body() body: { reassignRoleId?: string | null },
+    @Req() req: AuthenticatedRequest,
+    @Headers('user-agent') ua?: string,
   ) {
     return {
       success: true,
-      data: await this.directory.deleteRole(id, body?.reassignRoleId || null),
+      data: await this.directory.deleteRole(id, body?.reassignRoleId || null, this.ctx(req, ua)),
     };
   }
 
@@ -85,10 +91,12 @@ export class AdminDirectoryController {
       permissionIds?: string[];
       isActive?: boolean;
     },
+    @Req() req: AuthenticatedRequest,
+    @Headers('user-agent') ua?: string,
   ) {
     return {
       success: true,
-      data: await this.directory.updateRole(id, body),
+      data: await this.directory.updateRole(id, body, this.ctx(req, ua)),
     };
   }
 
@@ -232,4 +240,8 @@ export class AdminDirectoryController {
           .deleteTeam(id),
     };
   }
+  private ctx(req: AuthenticatedRequest, userAgent?: string) {
+    return { actorUserId: req.user!.id, ipAddress: req.ip, userAgent };
+  }
+
 }

@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/commo
 import { ConfigService } from '@nestjs/config';
 import { DatabaseService } from '../database/database.service.js';
 import { StaffMailService } from '../mailer/staff-mail.service.js';
+import { AuditService } from '../audit/audit.service.js';
 
 @Injectable()
 export class TaskReminderService implements OnModuleInit, OnModuleDestroy {
@@ -13,6 +14,7 @@ export class TaskReminderService implements OnModuleInit, OnModuleDestroy {
     private readonly db: DatabaseService,
     private readonly mail: StaffMailService,
     private readonly config: ConfigService,
+    private readonly audit: AuditService,
   ) {}
 
   onModuleInit() {
@@ -97,6 +99,20 @@ export class TaskReminderService implements OnModuleInit, OnModuleDestroy {
             SET email_status=$2,email_message=$3,sent_at=NOW()
             WHERE id=$1
           `,[claim.rows[0].id,delivery.status,delivery.message]);
+
+          await this.audit.log({
+            action: delivery.status === 'SENT' ? 'TASK_DUE_REMINDER_SENT' : 'TASK_DUE_REMINDER_FAILED',
+            module: 'tasks',
+            entityType: 'task',
+            entityId: task.id,
+            newValues: {
+              reminderKind: kind,
+              dueAt: task.due_at,
+              recipientUserId: recipient.id,
+              recipientRole: recipient.role_code,
+              emailStatus: delivery.status,
+            },
+          });
         }
       }
     } catch (error) {

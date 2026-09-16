@@ -54,17 +54,17 @@ export class CrmMailController {
   @Post('drafts')
   @UseGuards(AuthGuard, PermissionGuard)
   @RequirePermission('mail.send')
-  saveDraft(@Req() request: AuthenticatedRequest, @Body() body: any) { return this.wrap(this.service.saveDraft(this.actor(request), null, body)); }
+  saveDraft(@Req() request: AuthenticatedRequest, @Body() body: any, @Headers('user-agent') userAgent?: string) { return this.wrap(this.service.saveDraft(this.actor(request), null, body, this.ctx(request, userAgent))); }
 
   @Patch('drafts/:id')
   @UseGuards(AuthGuard, PermissionGuard)
   @RequirePermission('mail.send')
-  updateDraft(@Req() request: AuthenticatedRequest, @Param('id') id: string, @Body() body: any) { return this.wrap(this.service.saveDraft(this.actor(request), id, body)); }
+  updateDraft(@Req() request: AuthenticatedRequest, @Param('id') id: string, @Body() body: any, @Headers('user-agent') userAgent?: string) { return this.wrap(this.service.saveDraft(this.actor(request), id, body, this.ctx(request, userAgent))); }
 
   @Post('drafts/:id/delete')
   @UseGuards(AuthGuard, PermissionGuard)
   @RequirePermission('mail.send')
-  deleteDraft(@Req() request: AuthenticatedRequest, @Param('id') id: string) { return this.wrap(this.service.deleteDraft(this.actor(request), id)); }
+  deleteDraft(@Req() request: AuthenticatedRequest, @Param('id') id: string, @Headers('user-agent') userAgent?: string) { return this.wrap(this.service.deleteDraft(this.actor(request), id, this.ctx(request, userAgent))); }
 
   @Get('templates')
   @UseGuards(AuthGuard)
@@ -73,16 +73,16 @@ export class CrmMailController {
   @Post('templates')
   @UseGuards(AuthGuard, PermissionGuard)
   @RequirePermission('mail.templates.manage')
-  createTemplate(@Req() request: AuthenticatedRequest, @Body() body: any) { return this.wrap(this.service.createTemplate(this.actor(request), body)); }
+  createTemplate(@Req() request: AuthenticatedRequest, @Body() body: any, @Headers('user-agent') userAgent?: string) { return this.wrap(this.service.createTemplate(this.actor(request), body, this.ctx(request, userAgent))); }
 
   @Patch('templates/:id')
   @UseGuards(AuthGuard, PermissionGuard)
   @RequirePermission('mail.templates.manage')
-  updateTemplate(@Req() request: AuthenticatedRequest, @Param('id') id: string, @Body() body: any) { return this.wrap(this.service.updateTemplate(this.actor(request), id, body)); }
+  updateTemplate(@Req() request: AuthenticatedRequest, @Param('id') id: string, @Body() body: any, @Headers('user-agent') userAgent?: string) { return this.wrap(this.service.updateTemplate(this.actor(request), id, body, this.ctx(request, userAgent))); }
 
   @Get('attachments/:id')
   @UseGuards(AuthGuard)
-  attachment(@Req() request: AuthenticatedRequest, @Param('id') id: string) { return this.wrap(this.service.attachment(this.actor(request), id)); }
+  attachment(@Req() request: AuthenticatedRequest, @Param('id') id: string, @Headers('user-agent') userAgent?: string) { return this.wrap(this.service.attachment(this.actor(request), id, this.ctx(request, userAgent))); }
 
   @Post('webhooks/resend')
   webhook(@Query('token') token: string | undefined, @Body() body: any) { return this.wrap(this.service.handleResendWebhook(token, body)); }

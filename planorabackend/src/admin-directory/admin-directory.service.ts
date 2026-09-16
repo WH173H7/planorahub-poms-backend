@@ -6,6 +6,9 @@ import {
 } from '@nestjs/common';
 
 import { DatabaseService } from '../database/database.service.js';
+import { AuditService } from '../audit/audit.service.js';
+
+type AuditCtx = { actorUserId: string; ipAddress?: string; userAgent?: string };
 
 type DepartmentInput = {
   name?: string;
@@ -24,6 +27,7 @@ type TeamInput = {
 export class AdminDirectoryService {
   constructor(
     private readonly db: DatabaseService,
+    private readonly audit: AuditService,
   ) {}
 
   async getRoles() {
@@ -86,7 +90,7 @@ export class AdminDirectoryService {
     name?: string;
     description?: string;
     permissionIds?: string[];
-  }) {
+  }, ctx?: AuditCtx) {
     const name = params.name?.trim();
     if (!name) {
       throw new BadRequestException('Role name is required');
@@ -115,7 +119,9 @@ export class AdminDirectoryService {
 
     const role = result.rows[0];
     await this.syncRolePermissions(role.id, params.permissionIds ?? []);
-    return (await this.getRoleById(role.id))!;
+    const created=(await this.getRoleById(role.id))!;
+    await this.audit.log({actorUserId:ctx?.actorUserId,action:'ROLE_CREATED',module:'workforce',entityType:'role',entityId:role.id,newValues:{name:created.name,code:created.code,permissionCount:Array.isArray(created.permissions)?created.permissions.length:0,permissionIds:Array.isArray(created.permissions)?created.permissions.map((p:any)=>p.id):[]},ipAddress:ctx?.ipAddress,userAgent:ctx?.userAgent});
+    return created;
   }
 
   async updateRole(
@@ -126,6 +132,7 @@ export class AdminDirectoryService {
       permissionIds?: string[];
       isActive?: boolean;
     },
+    ctx?: AuditCtx,
   ) {
     const existing = await this.getRoleById(id);
     if (!existing) {
@@ -175,7 +182,10 @@ export class AdminDirectoryService {
       await this.syncRolePermissions(id, params.permissionIds);
     }
 
-    return (await this.getRoleById(id))!;
+    const updated=(await this.getRoleById(id))!;
+    const action=params.isActive===false?'ROLE_SUSPENDED':params.isActive===true&&existing.is_active===false?'ROLE_REACTIVATED':'ROLE_UPDATED';
+    await this.audit.log({actorUserId:ctx?.actorUserId,action,module:'workforce',entityType:'role',entityId:id,oldValues:{name:existing.name,isActive:existing.is_active,permissionCount:Array.isArray(existing.permissions)?existing.permissions.length:0,permissionIds:Array.isArray(existing.permissions)?existing.permissions.map((p:any)=>p.id):[]},newValues:{name:updated.name,isActive:updated.is_active,permissionCount:Array.isArray(updated.permissions)?updated.permissions.length:0,permissionIds:Array.isArray(updated.permissions)?updated.permissions.map((p:any)=>p.id):[]},ipAddress:ctx?.ipAddress,userAgent:ctx?.userAgent});
+    return updated;
   }
 
   private async getRoleById(id: string) {
@@ -290,7 +300,7 @@ export class AdminDirectoryService {
     };
   }
 
-  async deleteRole(id: string, reassignRoleId: string | null) {
+  async deleteRole(id: string, reassignRoleId: string | null, ctx?: AuditCtx) {
     const existing = await this.getRoleById(id);
     if (!existing) {
       throw new NotFoundException('Role not found');
@@ -372,6 +382,7 @@ export class AdminDirectoryService {
       client.release();
     }
 
+    await this.audit.log({actorUserId:ctx?.actorUserId,action:'ROLE_DELETED',module:'workforce',entityType:'role',entityId:id,oldValues:{name:existing.name,code:existing.code},newValues:{reassignedToRoleId:reassignRoleId},ipAddress:ctx?.ipAddress,userAgent:ctx?.userAgent});
     return { id, reassignedToRoleId: reassignRoleId };
   }
 

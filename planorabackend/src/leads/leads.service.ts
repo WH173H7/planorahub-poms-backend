@@ -56,10 +56,10 @@ export class LeadsService {
     return this.tasks.uploadAttachment(assignment.task_id, file, context);
   }
 
-  async getAssignmentAttachmentDownload(id: string, attachmentId: string) {
+  async getAssignmentAttachmentDownload(id: string, attachmentId: string, context?: ActionContext) {
     const assignment = await this.getAssignmentBatch(id);
     if (!assignment.task_id) throw new NotFoundException('Assignment task not found');
-    return this.tasks.getAttachmentDownload(assignment.task_id, attachmentId);
+    return this.tasks.getAttachmentDownload(assignment.task_id, attachmentId, context);
   }
 
   async deleteAssignmentAttachment(id: string, attachmentId: string, context?: ActionContext) {

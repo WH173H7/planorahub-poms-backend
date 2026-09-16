@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Icon } from '@/components/ui/icon';
 import { GlobalSearch } from '@/components/shell/global-search';
 import { supabase } from '@/lib/supabase/client';
+import { apiFetch } from '@/lib/api/client';
 import type { CrmUser } from '@/types/auth';
 import { NotificationCenter } from '@/components/workspace-ops/notification-center';
 import { routeForUser } from '@/lib/auth/routing';
@@ -33,6 +34,11 @@ export function AppTopbar({
   }, []);
 
   async function logout() {
+    try {
+      await apiFetch('/auth/logout', { method: 'POST' });
+    } catch {
+      // A logging/network failure must never prevent the user from signing out.
+    }
     await supabase.auth.signOut();
     window.location.replace('/login');
   }

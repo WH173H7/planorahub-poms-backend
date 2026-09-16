@@ -168,16 +168,22 @@ export class DeliveryService {
     return r.rows;
   }
 
-  async auditFeed(){
-    const r=await this.db.query(`SELECT al.id,al.action,al.module,al.entity_type,al.entity_id,al.created_at,al.ip_address,al.user_agent,
-      u.id actor_user_id,u.first_name actor_first_name,u.last_name actor_last_name,u.email actor_email,
-      r.code actor_role_code,r.name actor_role_name,d.name actor_department_name
-      FROM audit_logs al
-      LEFT JOIN users u ON u.id=al.actor_user_id
-      LEFT JOIN roles r ON r.id=u.role_id
-      LEFT JOIN departments d ON d.id=u.department_id
-      ORDER BY al.created_at DESC LIMIT 500`);
-    return r.rows;
+  async auditFeed(limit=250,offset=0){
+    const safeLimit=Math.min(500,Math.max(25,Math.floor(limit||250)));
+    const safeOffset=Math.max(0,Math.floor(offset||0));
+    const [count,items]=await Promise.all([
+      this.db.query(`SELECT COUNT(*)::int total FROM audit_logs`),
+      this.db.query(`SELECT al.id,al.action,al.module,al.entity_type,al.entity_id,al.old_values,al.new_values,al.created_at,al.ip_address,al.user_agent,
+        al.actor_user_id_snapshot,al.actor_name_snapshot,al.actor_email_snapshot,al.actor_role_snapshot,al.actor_department_snapshot,
+        u.id actor_user_id,u.first_name actor_first_name,u.last_name actor_last_name,u.email actor_email,
+        r.code actor_role_code,r.name actor_role_name,d.name actor_department_name
+        FROM audit_logs al
+        LEFT JOIN users u ON u.id=al.actor_user_id
+        LEFT JOIN roles r ON r.id=u.role_id
+        LEFT JOIN departments d ON d.id=u.department_id
+        ORDER BY al.created_at DESC LIMIT $1 OFFSET $2`,[safeLimit,safeOffset]),
+    ]);
+    return {items:items.rows,total:count.rows[0]?.total||0,limit:safeLimit,offset:safeOffset};
   }
 
 }

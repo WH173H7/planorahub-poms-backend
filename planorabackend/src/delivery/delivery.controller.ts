@@ -1,4 +1,4 @@
-import { Body,Controller,Get,Headers,Param,Post,Req,UseGuards } from '@nestjs/common';
+import { Body,Controller,Get,Headers,Param,Post,Query,Req,UseGuards } from '@nestjs/common';
 import { AuthGuard,type AuthenticatedRequest } from '../auth/auth.guard.js';
 import { PermissionGuard } from '../permissions/permission.guard.js';
 import { RequirePermission } from '../auth/require-permission.decorator.js';
@@ -14,7 +14,7 @@ export class DeliveryController{
  @Post('admin/leads/:id/reject-prospect') @UseGuards(PermissionGuard) @RequirePermission('leads.update.all') reject(@Param('id')id:string,@Body()body:{reason?:string},@Req()req:AuthenticatedRequest,@Headers('user-agent')ua?:string){return this.wrap(this.delivery.rejectProspect(id,body.reason,this.ctx(req,ua)))}
  @Post('admin/prospects/:id/convert-client') @UseGuards(PermissionGuard) @RequirePermission('leads.update.all') client(@Param('id')id:string,@Req()req:AuthenticatedRequest,@Headers('user-agent')ua?:string){return this.wrap(this.delivery.convertClient(id,this.ctx(req,ua)))}
  @Post('admin/clients/:id/revenue') @UseGuards(PermissionGuard) @RequirePermission('leads.update.all') revenue(@Param('id')id:string,@Body()body:{amount:number},@Req()req:AuthenticatedRequest,@Headers('user-agent')ua?:string){return this.wrap(this.delivery.recordClientRevenue(id,body.amount,this.ctx(req,ua)))}
- @Get('admin/audit-feed') @UseGuards(PermissionGuard) @RequirePermission('audit.read.all') audit(){return this.wrap(this.delivery.auditFeed())}
+ @Get('admin/audit-feed') @UseGuards(PermissionGuard) @RequirePermission('audit.read.all') audit(@Query('limit')limit?:string,@Query('offset')offset?:string){return this.wrap(this.delivery.auditFeed(Number(limit)||250,Number(offset)||0))}
  @Get('admin/latest-activities') @UseGuards(PermissionGuard) @RequirePermission('activities.read.all') latestActivities(){return this.wrap(this.delivery.latestActivities())}
   @Get('admin/calendar') @UseGuards(PermissionGuard) @RequirePermission('activities.read.all') calendar(){return this.wrap(this.delivery.calendar())}
  @Get('staff/calendar') staffCalendar(@Req()req:AuthenticatedRequest){return this.wrap(this.delivery.calendar(req.user!.id,true))}

@@ -4,10 +4,13 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { AppShell } from '@/components/shell/app-shell';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { NativeSelect } from '@/components/ui/native-select';
 import { getAuditFeed, type AuditItem } from '@/lib/delivery/api';
+
+const PAGE_SIZE = 250;
 
 const fmt = (value: string) =>
   new Intl.DateTimeFormat(undefined, {
@@ -26,28 +29,71 @@ const human = (value: string) =>
 
 const actorName = (item: AuditItem) =>
   [item.actor_first_name, item.actor_last_name].filter(Boolean).join(' ') ||
+  item.actor_name_snapshot ||
   item.actor_email ||
+  item.actor_email_snapshot ||
   'System';
+
+const pretty = (value: unknown) => {
+  if (value == null) return '';
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+};
 
 export function AuditView() {
   const [rows, setRows] = useState<AuditItem[]>([]);
+  const [total, setTotal] = useState(0);
   const [query, setQuery] = useState('');
   const [actor, setActor] = useState('ALL');
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
-    getAuditFeed().then((items) => {
-      if (active) setRows(items);
-    });
+    setLoading(true);
+    getAuditFeed(PAGE_SIZE, 0)
+      .then((page) => {
+        if (!active) return;
+        setRows(page.items);
+        setTotal(page.total);
+      })
+      .catch((loadError) => {
+        if (active) setError(loadError instanceof Error ? loadError.message : 'Unable to load audit logs.');
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
     return () => {
       active = false;
     };
   }, []);
 
+  async function loadOlder() {
+    setLoadingMore(true);
+    setError(null);
+    try {
+      const page = await getAuditFeed(PAGE_SIZE, rows.length);
+      setRows((current) => {
+        const known = new Set(current.map((item) => item.id));
+        return [...current, ...page.items.filter((item) => !known.has(item.id))];
+      });
+      setTotal(page.total);
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : 'Unable to load older audit logs.');
+    } finally {
+      setLoadingMore(false);
+    }
+  }
+
   const actors = useMemo(() => {
     const map = new Map<string, string>();
     rows.forEach((item) => {
-      if (item.actor_user_id) map.set(item.actor_user_id, actorName(item));
+      const id = item.actor_user_id || item.actor_user_id_snapshot;
+      if (id) map.set(id, actorName(item));
     });
     return [...map.entries()].sort((a, b) => a[1].localeCompare(b[1]));
   }, [rows]);
@@ -55,7 +101,7 @@ export function AuditView() {
   const visible = useMemo(
     () =>
       rows.filter((item) => {
-        if (actor !== 'ALL' && item.actor_user_id !== actor) return false;
+        if (actor !== 'ALL' && (item.actor_user_id || item.actor_user_id_snapshot) !== actor) return false;
         if (!query.trim()) return true;
         return [
           item.action,
@@ -65,8 +111,14 @@ export function AuditView() {
           item.actor_last_name,
           item.actor_email,
           item.actor_role_name,
+          item.actor_role_snapshot,
           item.actor_department_name,
+          item.actor_department_snapshot,
+          item.actor_email_snapshot,
           item.ip_address,
+          item.user_agent,
+          pretty(item.old_values),
+          pretty(item.new_values),
         ]
           .filter(Boolean)
           .join(' ')
@@ -81,14 +133,14 @@ export function AuditView() {
       area="admin"
       title="Audit Logs"
       breadcrumb="Insights"
-      description="App-wide security, account and meaningful CRM action history across Admin and Staff."
+      description="Security, account and meaningful CRM activity across Admin, Staff and background operations."
     >
       <div className="page-stack audit-page">
         <Card>
           <div className="ui-card-content audit-filter-grid">
             <Input
               label="Search logs"
-              placeholder="Action, staff, module, email or IP…"
+              placeholder="Action, staff, module, email, IP or change…"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
             />
@@ -109,9 +161,12 @@ export function AuditView() {
 
         <Card className="audit-results-card">
           <div className="audit-result-summary">
-            Showing <strong>{visible.length}</strong> of {rows.length} recent audit events. Staff task,
-            Lead, Contact, pursuit, chat, reminder and authenticated-session actions appear here.
+            {loading ? 'Loading audit trail…' : (
+              <>Showing <strong>{visible.length}</strong> matching events from <strong>{rows.length}</strong> loaded of <strong>{total}</strong> stored audit records.</>
+            )}
           </div>
+
+          {error ? <div className="ui-card-content"><p className="ui-error">{error}</p></div> : null}
 
           <div className="audit-desktop-table">
             <div className="table-wrap audit-table-wrap">
@@ -123,8 +178,8 @@ export function AuditView() {
                     <th>Role / department</th>
                     <th>Action</th>
                     <th>Module</th>
-                    <th>Entity</th>
-                    <th>IP</th>
+                    <th>Entity / change</th>
+                    <th>Network / device</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -133,21 +188,29 @@ export function AuditView() {
                       <td>{fmt(item.created_at)}</td>
                       <td>
                         <strong>{actorName(item)}</strong>
-                        {item.actor_email ? <div className="ui-help">{item.actor_email}</div> : null}
+                        {(item.actor_email || item.actor_email_snapshot) ? <div className="ui-help">{item.actor_email || item.actor_email_snapshot}</div> : null}
                       </td>
                       <td>
-                        {item.actor_role_name || '—'}
-                        {item.actor_department_name ? (
-                          <div className="ui-help">{item.actor_department_name}</div>
-                        ) : null}
+                        {item.actor_role_name || item.actor_role_snapshot || ((item.actor_user_id || item.actor_user_id_snapshot) ? '—' : 'System process')}
+                        {(item.actor_department_name || item.actor_department_snapshot) ? <div className="ui-help">{item.actor_department_name || item.actor_department_snapshot}</div> : null}
                       </td>
                       <td>{human(item.action)}</td>
                       <td><Badge tone="neutral">{item.module}</Badge></td>
                       <td>
                         {item.entity_type}
                         {item.entity_id ? <div className="ui-help">{item.entity_id.slice(0, 8)}…</div> : null}
+                        {(item.old_values || item.new_values) ? (
+                          <details className="audit-detail-disclosure">
+                            <summary>View change</summary>
+                            {item.old_values ? <pre>Before\n{pretty(item.old_values)}</pre> : null}
+                            {item.new_values ? <pre>After / context\n{pretty(item.new_values)}</pre> : null}
+                          </details>
+                        ) : null}
                       </td>
-                      <td>{item.ip_address || '—'}</td>
+                      <td>
+                        {item.ip_address || '—'}
+                        {item.user_agent ? <div className="ui-help" title={item.user_agent}>{item.user_agent.slice(0, 64)}{item.user_agent.length > 64 ? '…' : ''}</div> : null}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -166,31 +229,30 @@ export function AuditView() {
                   <Badge tone="neutral">{item.module}</Badge>
                 </header>
                 <dl>
-                  <div>
-                    <dt>Actor</dt>
-                    <dd>{actorName(item)}</dd>
-                  </div>
-                  <div>
-                    <dt>Role</dt>
-                    <dd>{item.actor_role_name || '—'}</dd>
-                  </div>
-                  <div>
-                    <dt>Department</dt>
-                    <dd>{item.actor_department_name || '—'}</dd>
-                  </div>
-                  <div>
-                    <dt>Entity</dt>
-                    <dd>{item.entity_type}{item.entity_id ? ` · ${item.entity_id.slice(0, 8)}…` : ''}</dd>
-                  </div>
-                  <div>
-                    <dt>IP</dt>
-                    <dd>{item.ip_address || '—'}</dd>
-                  </div>
+                  <div><dt>Actor</dt><dd>{actorName(item)}</dd></div>
+                  <div><dt>Role</dt><dd>{item.actor_role_name || item.actor_role_snapshot || ((item.actor_user_id || item.actor_user_id_snapshot) ? '—' : 'System process')}</dd></div>
+                  <div><dt>Department</dt><dd>{item.actor_department_name || item.actor_department_snapshot || '—'}</dd></div>
+                  <div><dt>Entity</dt><dd>{item.entity_type}{item.entity_id ? ` · ${item.entity_id.slice(0, 8)}…` : ''}</dd></div>
+                  <div><dt>IP</dt><dd>{item.ip_address || '—'}</dd></div>
                 </dl>
-                {item.actor_email ? <small>{item.actor_email}</small> : null}
+                {(item.actor_email || item.actor_email_snapshot) ? <small>{item.actor_email || item.actor_email_snapshot}</small> : null}
+                {item.user_agent ? <small>{item.user_agent}</small> : null}
+                {(item.old_values || item.new_values) ? (
+                  <details className="audit-detail-disclosure">
+                    <summary>View audit context</summary>
+                    {item.old_values ? <pre>Before\n{pretty(item.old_values)}</pre> : null}
+                    {item.new_values ? <pre>After / context\n{pretty(item.new_values)}</pre> : null}
+                  </details>
+                ) : null}
               </article>
             ))}
           </div>
+
+          {rows.length < total ? (
+            <div className="ui-card-content" style={{ display: 'flex', justifyContent: 'center' }}>
+              <Button variant="outline" loading={loadingMore} onClick={() => void loadOlder()}>Load older events</Button>
+            </div>
+          ) : null}
         </Card>
       </div>
     </AppShell>

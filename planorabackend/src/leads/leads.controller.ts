@@ -39,8 +39,8 @@ export class LeadsController {
 
   @Get('assignment-batches/:batchId/attachments/:attachmentId/download')
   @RequirePermission('leads.read.all')
-  async assignmentAttachmentDownload(@Param('batchId') batchId: string, @Param('attachmentId') attachmentId: string) {
-    return { success: true, data: await this.leads.getAssignmentAttachmentDownload(batchId, attachmentId) };
+  async assignmentAttachmentDownload(@Param('batchId') batchId: string, @Param('attachmentId') attachmentId: string, @Req() request: AuthenticatedRequest, @Headers('user-agent') ua?: string) {
+    return { success: true, data: await this.leads.getAssignmentAttachmentDownload(batchId, attachmentId, this.context(request, ua)) };
   }
 
   @Delete('assignment-batches/:batchId/attachments/:attachmentId')

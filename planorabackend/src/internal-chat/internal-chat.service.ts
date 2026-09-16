@@ -75,7 +75,7 @@ export class InternalChatService{
     return result.rows.reverse();
   }
 
-  async send(channelId:string,body:string,userId:string,roleCode:string,replyToId?:string|null){
+  async send(channelId:string,body:string,userId:string,roleCode:string,replyToId?:string|null,ctx?:Ctx){
     await this.ensureAccess(channelId,userId,roleCode);
     const text=body?.trim();
     if(!text)throw new BadRequestException('Message cannot be empty');
@@ -84,10 +84,11 @@ export class InternalChatService{
     const row=(await this.db.query(`INSERT INTO internal_chat_messages(channel_id,sender_user_id,body,reply_to_id) VALUES($1,$2,$3,$4) RETURNING *`,[channelId,userId,text,replyToId||null])).rows[0];
     await this.db.query(`UPDATE internal_chat_channels SET updated_at=NOW() WHERE id=$1`,[channelId]);
     await this.db.query(`INSERT INTO internal_chat_channel_reads(channel_id,user_id,last_read_at) VALUES($1,$2,NOW()) ON CONFLICT(channel_id,user_id) DO UPDATE SET last_read_at=EXCLUDED.last_read_at`,[channelId,userId]);
+    await this.audit.log({actorUserId:userId,action:'CHAT_MESSAGE_SENT',module:'communications',entityType:'chat_message',entityId:String(row.id),newValues:{channelId,replyToId:replyToId||null},ipAddress:ctx?.ipAddress,userAgent:ctx?.userAgent});
     return row;
   }
 
-  async upload(channelId:string,file:any,userId:string,roleCode:string){
+  async upload(channelId:string,file:any,userId:string,roleCode:string,ctx?:Ctx){
     await this.ensureAccess(channelId,userId,roleCode);
     if(!file)throw new BadRequestException('File is required');
     if(file.size>10*1024*1024)throw new BadRequestException('Attachment must be 10 MB or smaller');
@@ -98,29 +99,33 @@ export class InternalChatService{
     const message=(await this.db.query(`INSERT INTO internal_chat_messages(channel_id,sender_user_id,body) VALUES($1,$2,$3) RETURNING *`,[channelId,userId,`Shared ${file.originalname}`])).rows[0];
     await this.db.query(`INSERT INTO internal_chat_attachments(message_id,file_name,mime_type,file_size,storage_path) VALUES($1,$2,$3,$4,$5)`,[message.id,file.originalname,file.mimetype,file.size,path]);
     await this.db.query(`UPDATE internal_chat_channels SET updated_at=NOW() WHERE id=$1`,[channelId]);
+    await this.audit.log({actorUserId:userId,action:'CHAT_ATTACHMENT_SENT',module:'communications',entityType:'chat_message',entityId:String(message.id),newValues:{channelId,fileName:file.originalname,fileSize:file.size},ipAddress:ctx?.ipAddress,userAgent:ctx?.userAgent});
     return message;
   }
 
-  async attachment(id:string,userId:string,roleCode:string){
+  async attachment(id:string,userId:string,roleCode:string,ctx?:Ctx){
     const row=(await this.db.query(`SELECT a.*,m.channel_id FROM internal_chat_attachments a JOIN internal_chat_messages m ON m.id=a.message_id WHERE a.id=$1`,[id])).rows[0];
     if(!row)throw new NotFoundException('Attachment not found');
     await this.ensureAccess(row.channel_id,userId,roleCode);
     const signed=await this.supabase.admin.storage.from(row.storage_bucket).createSignedUrl(row.storage_path,300);
     if(signed.error)throw new BadRequestException('Unable to open attachment');
+    await this.audit.log({actorUserId:userId,action:'CHAT_ATTACHMENT_OPENED',module:'communications',entityType:'chat_attachment',entityId:id,newValues:{channelId:row.channel_id,fileName:row.file_name},ipAddress:ctx?.ipAddress,userAgent:ctx?.userAgent});
     return{url:signed.data.signedUrl,fileName:row.file_name,mimeType:row.mime_type};
   }
 
-  async edit(id:string,body:string,userId:string){
+  async edit(id:string,body:string,userId:string,ctx?:Ctx){
     const text=body?.trim();if(!text)throw new BadRequestException('Message cannot be empty');
     const row=(await this.db.query(`UPDATE internal_chat_messages SET body=$3,edited_at=NOW() WHERE id=$1 AND sender_user_id=$2 AND deleted_at IS NULL RETURNING *`,[id,userId,text])).rows[0];
     if(!row)throw new NotFoundException('Message not found');
+    await this.audit.log({actorUserId:userId,action:'CHAT_MESSAGE_EDITED',module:'communications',entityType:'chat_message',entityId:id,newValues:{edited:true},ipAddress:ctx?.ipAddress,userAgent:ctx?.userAgent});
     return row;
   }
 
-  async remove(id:string,userId:string,roleCode:string){
+  async remove(id:string,userId:string,roleCode:string,ctx?:Ctx){
     const admin=roleCode==='SUPER_ADMIN';
     const row=(await this.db.query(`UPDATE internal_chat_messages SET body='',deleted_at=NOW(),edited_at=NOW() WHERE id=$1 AND (sender_user_id=$2 OR $3::boolean) RETURNING *`,[id,userId,admin])).rows[0];
     if(!row)throw new NotFoundException('Message not found');
+    await this.audit.log({actorUserId:userId,action:'CHAT_MESSAGE_DELETED',module:'communications',entityType:'chat_message',entityId:id,oldValues:{channelId:row.channel_id,senderUserId:row.sender_user_id},ipAddress:ctx?.ipAddress,userAgent:ctx?.userAgent});
     return true;
   }
 

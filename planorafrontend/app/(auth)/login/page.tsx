@@ -7,6 +7,7 @@ import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { getCurrentCrmUser } from '@/lib/auth/current-user';
+import { apiFetch } from '@/lib/api/client';
 import { routeForUser } from '@/lib/auth/routing';
 import { supabase } from '@/lib/supabase/client';
 
@@ -65,6 +66,7 @@ export default function LoginPage() {
     }
 
     try {
+      await apiFetch('/auth/session-open', { method: 'POST' });
       const user = await getCurrentCrmUser();
       window.location.assign(user.must_change_password ? '/change-password' : routeForUser(user));
     } catch (caught) {

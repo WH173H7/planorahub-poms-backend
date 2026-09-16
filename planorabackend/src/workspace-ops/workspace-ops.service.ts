@@ -3,16 +3,41 @@ import {randomUUID} from 'node:crypto';
 import {SupabaseService} from '../supabase/supabase.service.js';
 import {DatabaseService} from '../database/database.service.js';
 import {AuditService} from '../audit/audit.service.js';
+type AuditCtx={actorUserId:string;ipAddress?:string;userAgent?:string};
 @Injectable()
 export class WorkspaceOpsService{
  private readonly logger=new Logger(WorkspaceOpsService.name);
  constructor(private readonly db:DatabaseService,private readonly supabase:SupabaseService,private readonly audit:AuditService){}
  async departments(){return (await this.db.query(`SELECT d.*,(SELECT COUNT(*)::int FROM users u WHERE u.department_id=d.id AND u.status NOT IN('DISABLED')) staff_count,(SELECT COUNT(*)::int FROM teams t WHERE t.department_id=d.id AND t.is_active=true) team_count FROM departments d ORDER BY d.is_active DESC,d.name`)).rows}
- async createDepartment(b:{name?:string;description?:string}){const name=b.name?.trim();if(!name)throw new BadRequestException('Department name is required');return (await this.db.query(`INSERT INTO departments(name,description) VALUES($1,$2) RETURNING *`,[name,b.description?.trim()||null])).rows[0]}
- async setDepartment(id:string,b:{name?:string;description?:string;isActive?:boolean}){const r=await this.db.query(`UPDATE departments SET name=COALESCE(NULLIF($2,''),name),description=$3,is_active=COALESCE($4,is_active),updated_at=NOW() WHERE id=$1 RETURNING *`,[id,b.name?.trim()||'',b.description?.trim()||null,b.isActive??null]);if(!r.rows[0])throw new NotFoundException('Department not found');return r.rows[0]}
+ async createDepartment(b:{name?:string;description?:string},ctx:AuditCtx){
+  const name=b.name?.trim();if(!name)throw new BadRequestException('Department name is required');
+  const row=(await this.db.query(`INSERT INTO departments(name,description) VALUES($1,$2) RETURNING *`,[name,b.description?.trim()||null])).rows[0];
+  await this.audit.log({actorUserId:ctx.actorUserId,action:'DEPARTMENT_CREATED',module:'workforce',entityType:'department',entityId:row.id,newValues:{name:row.name,description:row.description},ipAddress:ctx.ipAddress,userAgent:ctx.userAgent});
+  return row;
+ }
+ async setDepartment(id:string,b:{name?:string;description?:string;isActive?:boolean},ctx:AuditCtx){
+  const before=(await this.db.query(`SELECT * FROM departments WHERE id=$1`,[id])).rows[0];if(!before)throw new NotFoundException('Department not found');
+  const r=await this.db.query(`UPDATE departments SET name=COALESCE(NULLIF($2,''),name),description=$3,is_active=COALESCE($4,is_active),updated_at=NOW() WHERE id=$1 RETURNING *`,[id,b.name?.trim()||'',b.description?.trim()||null,b.isActive??null]);
+  const row=r.rows[0];
+  const action=b.isActive===false?'DEPARTMENT_SUSPENDED':b.isActive===true&&before.is_active===false?'DEPARTMENT_REACTIVATED':'DEPARTMENT_UPDATED';
+  await this.audit.log({actorUserId:ctx.actorUserId,action,module:'workforce',entityType:'department',entityId:id,oldValues:{name:before.name,description:before.description,isActive:before.is_active},newValues:{name:row.name,description:row.description,isActive:row.is_active},ipAddress:ctx.ipAddress,userAgent:ctx.userAgent});
+  return row;
+ }
  async teams(departmentId?:string){return (await this.db.query(`SELECT t.*,d.name department_name,u.first_name manager_first_name,u.last_name manager_last_name,(SELECT COUNT(*)::int FROM team_members tm WHERE tm.team_id=t.id) member_count FROM teams t LEFT JOIN departments d ON d.id=t.department_id LEFT JOIN users u ON u.id=t.manager_id WHERE ($1::uuid IS NULL OR t.department_id=$1) ORDER BY t.is_active DESC,d.name,t.name`,[departmentId||null])).rows}
- async createTeam(b:{name?:string;description?:string;departmentId?:string;managerId?:string|null}){if(!b.name?.trim())throw new BadRequestException('Team name is required');return (await this.db.query(`INSERT INTO teams(name,description,department_id,manager_id) VALUES($1,$2,$3,$4) RETURNING *`,[b.name.trim(),b.description?.trim()||null,b.departmentId||null,b.managerId||null])).rows[0]}
- async setTeam(id:string,b:{name?:string;description?:string;managerId?:string|null;isActive?:boolean}){const r=await this.db.query(`UPDATE teams SET name=COALESCE(NULLIF($2,''),name),description=$3,manager_id=$4,is_active=COALESCE($5,is_active),updated_at=NOW() WHERE id=$1 RETURNING *`,[id,b.name?.trim()||'',b.description?.trim()||null,b.managerId||null,b.isActive??null]);if(!r.rows[0])throw new NotFoundException('Team not found');return r.rows[0]}
+ async createTeam(b:{name?:string;description?:string;departmentId?:string;managerId?:string|null},ctx:AuditCtx){
+  if(!b.name?.trim())throw new BadRequestException('Team name is required');
+  const row=(await this.db.query(`INSERT INTO teams(name,description,department_id,manager_id) VALUES($1,$2,$3,$4) RETURNING *`,[b.name.trim(),b.description?.trim()||null,b.departmentId||null,b.managerId||null])).rows[0];
+  await this.audit.log({actorUserId:ctx.actorUserId,action:'TEAM_CREATED',module:'workforce',entityType:'team',entityId:row.id,newValues:{name:row.name,departmentId:row.department_id,managerId:row.manager_id},ipAddress:ctx.ipAddress,userAgent:ctx.userAgent});
+  return row;
+ }
+ async setTeam(id:string,b:{name?:string;description?:string;managerId?:string|null;isActive?:boolean},ctx:AuditCtx){
+  const before=(await this.db.query(`SELECT * FROM teams WHERE id=$1`,[id])).rows[0];if(!before)throw new NotFoundException('Team not found');
+  const r=await this.db.query(`UPDATE teams SET name=COALESCE(NULLIF($2,''),name),description=$3,manager_id=$4,is_active=COALESCE($5,is_active),updated_at=NOW() WHERE id=$1 RETURNING *`,[id,b.name?.trim()||'',b.description?.trim()||null,b.managerId||null,b.isActive??null]);
+  const row=r.rows[0];
+  const action=b.isActive===false?'TEAM_SUSPENDED':b.isActive===true&&before.is_active===false?'TEAM_REACTIVATED':'TEAM_UPDATED';
+  await this.audit.log({actorUserId:ctx.actorUserId,action,module:'workforce',entityType:'team',entityId:id,oldValues:{name:before.name,managerId:before.manager_id,isActive:before.is_active},newValues:{name:row.name,managerId:row.manager_id,isActive:row.is_active},ipAddress:ctx.ipAddress,userAgent:ctx.userAgent});
+  return row;
+ }
 
  async departmentOverview(id:string){
   const department=(await this.db.query(`SELECT d.*,(SELECT COUNT(*)::int FROM users u WHERE u.department_id=d.id AND u.status<>'DISABLED') staff_count,(SELECT COUNT(*)::int FROM teams t WHERE t.department_id=d.id) team_count FROM departments d WHERE d.id=$1`,[id])).rows[0];
@@ -46,7 +71,7 @@ export class WorkspaceOpsService{
   ]);
   return {team,members,associations:associations.rows[0],activity:activity.rows};
  }
- async deleteDepartmentManaged(id:string,reassignDepartmentId:string|null,actorUserId:string){
+ async deleteDepartmentManaged(id:string,reassignDepartmentId:string|null,ctx:AuditCtx){
   if(reassignDepartmentId===id)throw new BadRequestException('Choose a different replacement department');
   const current=(await this.db.query(`SELECT id,name FROM departments WHERE id=$1`,[id])).rows[0];
   if(!current)throw new NotFoundException('Department not found');
@@ -81,10 +106,10 @@ export class WorkspaceOpsService{
    await c.query(`DELETE FROM departments WHERE id=$1`,[id]);
    await c.query('COMMIT');
   }catch(e){await c.query('ROLLBACK');throw e}finally{c.release()}
-  await this.audit.log({actorUserId,action:'DEPARTMENT_DELETED',module:'workforce',entityType:'department',entityId:id,oldValues:{name:current.name},newValues:{reassignedToDepartmentId:reassignDepartmentId}});
+  await this.audit.log({actorUserId:ctx.actorUserId,action:'DEPARTMENT_DELETED',module:'workforce',entityType:'department',entityId:id,oldValues:{name:current.name},newValues:{reassignedToDepartmentId:reassignDepartmentId},ipAddress:ctx.ipAddress,userAgent:ctx.userAgent});
   return {id,reassignedToDepartmentId:reassignDepartmentId};
  }
- async deleteTeamManaged(id:string,reassignTeamId:string|null,actorUserId:string){
+ async deleteTeamManaged(id:string,reassignTeamId:string|null,ctx:AuditCtx){
   if(reassignTeamId===id)throw new BadRequestException('Choose a different replacement team');
   const current=(await this.db.query(`SELECT id,name FROM teams WHERE id=$1`,[id])).rows[0];
   if(!current)throw new NotFoundException('Team not found');
@@ -118,7 +143,7 @@ export class WorkspaceOpsService{
    await c.query(`DELETE FROM teams WHERE id=$1`,[id]);
    await c.query('COMMIT');
   }catch(e){await c.query('ROLLBACK');throw e}finally{c.release()}
-  await this.audit.log({actorUserId,action:'TEAM_DELETED',module:'workforce',entityType:'team',entityId:id,oldValues:{name:current.name},newValues:{reassignedToTeamId:reassignTeamId}});
+  await this.audit.log({actorUserId:ctx.actorUserId,action:'TEAM_DELETED',module:'workforce',entityType:'team',entityId:id,oldValues:{name:current.name},newValues:{reassignedToTeamId:reassignTeamId},ipAddress:ctx.ipAddress,userAgent:ctx.userAgent});
   return {id,reassignedToTeamId:reassignTeamId};
  }
  async notifications(userId:string){return (await this.db.query(`SELECT * FROM notifications WHERE user_id=$1 ORDER BY created_at DESC LIMIT 60`,[userId])).rows}
@@ -147,9 +172,14 @@ export class WorkspaceOpsService{
   `,[userId,roleCode])).rows
  }
  async conversation(userId:string,otherId:string,roleCode:string){await this.assertDirectAccess(userId,otherId,roleCode);const c=await this.ensureConversation(userId,otherId);await this.db.query(`UPDATE direct_chat_messages SET delivered_at=COALESCE(delivered_at,NOW()),read_at=COALESCE(read_at,NOW()) WHERE conversation_id=$1 AND sender_user_id<>$2`,[c.id,userId]);const messages=(await this.db.query(`SELECT m.*,u.first_name,u.last_name,COALESCE(json_agg(json_build_object('id',a.id,'file_name',a.file_name,'mime_type',a.mime_type,'file_size',a.file_size)) FILTER(WHERE a.id IS NOT NULL),'[]') attachments FROM direct_chat_messages m JOIN users u ON u.id=m.sender_user_id LEFT JOIN direct_chat_attachments a ON a.message_id=m.id WHERE m.conversation_id=$1 GROUP BY m.id,u.first_name,u.last_name ORDER BY m.created_at`,[c.id])).rows;return {conversation:c,messages}}
- async send(userId:string,otherId:string,body:string,roleCode:string){const text=body?.trim();if(!text)throw new BadRequestException('Message cannot be empty');await this.assertDirectAccess(userId,otherId,roleCode);const c=await this.ensureConversation(userId,otherId);const m=(await this.db.query(`INSERT INTO direct_chat_messages(conversation_id,sender_user_id,body) VALUES($1,$2,$3) RETURNING *`,[c.id,userId,text])).rows[0];await this.db.query(`INSERT INTO notifications(user_id,title,body,kind,href) SELECT $1,'New message',first_name||' sent you a message','CHAT','/home' FROM users WHERE id=$2`,[otherId,userId]);await this.audit.log({actorUserId:userId,action:'CHAT_MESSAGE_SENT',module:'communications',entityType:'direct_chat_message',entityId:String(m.id),newValues:{recipientUserId:otherId}});return m}
- async uploadChat(userId:string,otherId:string,file:any,roleCode:string){if(!file)throw new BadRequestException('File is required');if(file.size>10*1024*1024)throw new BadRequestException('File must be 10 MB or smaller');await this.assertDirectAccess(userId,otherId,roleCode);const c=await this.ensureConversation(userId,otherId);const safe=String(file.originalname||'attachment').replace(/[^a-zA-Z0-9._-]/g,'_');const path=`chat/${c.id}/${randomUUID()}-${safe}`;const up=await this.supabase.admin.storage.from('task-attachments').upload(path,file.buffer,{contentType:file.mimetype,upsert:false});if(up.error)throw new BadRequestException('Attachment upload failed');const m=(await this.db.query(`INSERT INTO direct_chat_messages(conversation_id,sender_user_id,body) VALUES($1,$2,$3) RETURNING *`,[c.id,userId,`Shared ${file.originalname}`])).rows[0];await this.db.query(`INSERT INTO direct_chat_attachments(message_id,file_name,mime_type,file_size,storage_path) VALUES($1,$2,$3,$4,$5)`,[m.id,file.originalname,file.mimetype,file.size,path]);await this.db.query(`INSERT INTO notifications(user_id,title,body,kind,href) VALUES($1,'New chat attachment',$2,'CHAT','/home')`,[otherId,file.originalname]);await this.audit.log({actorUserId:userId,action:'CHAT_ATTACHMENT_SENT',module:'communications',entityType:'direct_chat_message',entityId:String(m.id),newValues:{recipientUserId:otherId,fileName:file.originalname,fileSize:file.size}});return m}
- async chatAttachment(userId:string,id:string){const r=await this.db.query(`SELECT a.*,c.user_a_id,c.user_b_id FROM direct_chat_attachments a JOIN direct_chat_messages m ON m.id=a.message_id JOIN direct_chat_conversations c ON c.id=m.conversation_id WHERE a.id=$1 AND ($2=c.user_a_id OR $2=c.user_b_id)`,[id,userId]);const a=r.rows[0];if(!a)throw new NotFoundException('Attachment not found');const signed=await this.supabase.admin.storage.from(a.storage_bucket).createSignedUrl(a.storage_path,300);if(signed.error)throw new BadRequestException('Unable to open attachment');return {url:signed.data.signedUrl,fileName:a.file_name,mimeType:a.mime_type}}
+ async send(userId:string,otherId:string,body:string,roleCode:string,ctx?:AuditCtx){const text=body?.trim();if(!text)throw new BadRequestException('Message cannot be empty');await this.assertDirectAccess(userId,otherId,roleCode);const c=await this.ensureConversation(userId,otherId);const m=(await this.db.query(`INSERT INTO direct_chat_messages(conversation_id,sender_user_id,body) VALUES($1,$2,$3) RETURNING *`,[c.id,userId,text])).rows[0];await this.db.query(`INSERT INTO notifications(user_id,title,body,kind,href) SELECT $1,'New message',first_name||' sent you a message','CHAT','/home' FROM users WHERE id=$2`,[otherId,userId]);await this.audit.log({actorUserId:userId,action:'CHAT_MESSAGE_SENT',module:'communications',entityType:'direct_chat_message',entityId:String(m.id),newValues:{recipientUserId:otherId},ipAddress:ctx?.ipAddress,userAgent:ctx?.userAgent});return m}
+ async uploadChat(userId:string,otherId:string,file:any,roleCode:string,ctx?:AuditCtx){if(!file)throw new BadRequestException('File is required');if(file.size>10*1024*1024)throw new BadRequestException('File must be 10 MB or smaller');await this.assertDirectAccess(userId,otherId,roleCode);const c=await this.ensureConversation(userId,otherId);const safe=String(file.originalname||'attachment').replace(/[^a-zA-Z0-9._-]/g,'_');const path=`chat/${c.id}/${randomUUID()}-${safe}`;const up=await this.supabase.admin.storage.from('task-attachments').upload(path,file.buffer,{contentType:file.mimetype,upsert:false});if(up.error)throw new BadRequestException('Attachment upload failed');const m=(await this.db.query(`INSERT INTO direct_chat_messages(conversation_id,sender_user_id,body) VALUES($1,$2,$3) RETURNING *`,[c.id,userId,`Shared ${file.originalname}`])).rows[0];await this.db.query(`INSERT INTO direct_chat_attachments(message_id,file_name,mime_type,file_size,storage_path) VALUES($1,$2,$3,$4,$5)`,[m.id,file.originalname,file.mimetype,file.size,path]);await this.db.query(`INSERT INTO notifications(user_id,title,body,kind,href) VALUES($1,'New chat attachment',$2,'CHAT','/home')`,[otherId,file.originalname]);await this.audit.log({actorUserId:userId,action:'CHAT_ATTACHMENT_SENT',module:'communications',entityType:'direct_chat_message',entityId:String(m.id),newValues:{recipientUserId:otherId,fileName:file.originalname,fileSize:file.size},ipAddress:ctx?.ipAddress,userAgent:ctx?.userAgent});return m}
+ async chatAttachment(userId:string,id:string,ctx?:AuditCtx){
+  const r=await this.db.query(`SELECT a.*,c.user_a_id,c.user_b_id FROM direct_chat_attachments a JOIN direct_chat_messages m ON m.id=a.message_id JOIN direct_chat_conversations c ON c.id=m.conversation_id WHERE a.id=$1 AND ($2=c.user_a_id OR $2=c.user_b_id)`,[id,userId]);const a=r.rows[0];if(!a)throw new NotFoundException('Attachment not found');
+  const signed=await this.supabase.admin.storage.from(a.storage_bucket).createSignedUrl(a.storage_path,300);if(signed.error)throw new BadRequestException('Unable to open attachment');
+  if(ctx)await this.audit.log({actorUserId:userId,action:'CHAT_ATTACHMENT_OPENED',module:'communications',entityType:'direct_chat_attachment',entityId:id,newValues:{fileName:a.file_name},ipAddress:ctx.ipAddress,userAgent:ctx.userAgent});
+  return {url:signed.data.signedUrl,fileName:a.file_name,mimeType:a.mime_type};
+ }
  async search(q:string,admin:boolean,userId:string){
   const x=q?.trim();
   if(!x||x.length<2)return[];
@@ -222,12 +252,28 @@ export class WorkspaceOpsService{
   return r.rows
 }
  async broadcasts(){return (await this.db.query(`SELECT b.*,u.first_name,u.last_name,(SELECT COUNT(*)::int FROM broadcast_recipients br WHERE br.broadcast_id=b.id) recipient_count,(SELECT COUNT(*)::int FROM broadcast_recipients br WHERE br.broadcast_id=b.id AND br.read_at IS NOT NULL) read_count FROM broadcasts b LEFT JOIN users u ON u.id=b.created_by_id ORDER BY b.created_at DESC LIMIT 100`)).rows}
- async createBroadcast(userId:string,b:any){if(!b.title?.trim()||!b.body?.trim())throw new BadRequestException('Title and message are required');const ids=Array.isArray(b.audienceIds)?b.audienceIds:[];const row=(await this.db.query(`INSERT INTO broadcasts(title,body,priority,channel,audience_type,audience_ids,created_by_id,scheduled_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,[b.title.trim(),b.body.trim(),b.priority||'NORMAL',b.channel||'IN_APP',b.audienceType||'EVERYONE',ids,userId,b.scheduledAt||null,b.expiresAt||null])).rows[0];const recipients=await this.db.query(`SELECT DISTINCT u.id FROM users u JOIN roles r ON r.id=u.role_id LEFT JOIN team_members tm ON tm.user_id=u.id WHERE u.status='ACTIVE' AND r.code<>'SUPER_ADMIN' AND ($1='EVERYONE' OR ($1='DEPARTMENT' AND u.department_id=ANY($2::uuid[])) OR ($1='TEAM' AND tm.team_id=ANY($2::uuid[])) OR ($1='ROLE' AND u.role_id=ANY($2::uuid[])) OR ($1='SELECTED' AND u.id=ANY($2::uuid[])))`,[row.audience_type,ids]);for(const u of recipients.rows){await this.db.query(`INSERT INTO broadcast_recipients(broadcast_id,user_id,in_app_sent_at,email_status) VALUES($1,$2,CASE WHEN $3 IN('IN_APP','BOTH') THEN NOW() END,CASE WHEN $3 IN('EMAIL','BOTH') THEN 'PENDING_WORKSPACE' ELSE 'NOT_REQUESTED' END) ON CONFLICT DO NOTHING`,[row.id,u.id,row.channel]);if(['IN_APP','BOTH'].includes(row.channel))await this.db.query(`INSERT INTO notifications(user_id,title,body,kind,href,broadcast_id) VALUES($1,$2,$3,'BROADCAST','/home',$4)`,[u.id,row.title,row.body,row.id])}return {...row,recipient_count:recipients.rows.length}}
+ async createBroadcast(userId:string,b:any,ctx?:AuditCtx){
+  if(!b.title?.trim()||!b.body?.trim())throw new BadRequestException('Title and message are required');const ids=Array.isArray(b.audienceIds)?b.audienceIds:[];
+  const row=(await this.db.query(`INSERT INTO broadcasts(title,body,priority,channel,audience_type,audience_ids,created_by_id,scheduled_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,[b.title.trim(),b.body.trim(),b.priority||'NORMAL',b.channel||'IN_APP',b.audienceType||'EVERYONE',ids,userId,b.scheduledAt||null,b.expiresAt||null])).rows[0];
+  const recipients=await this.db.query(`SELECT DISTINCT u.id FROM users u JOIN roles r ON r.id=u.role_id LEFT JOIN team_members tm ON tm.user_id=u.id WHERE u.status='ACTIVE' AND r.code<>'SUPER_ADMIN' AND ($1='EVERYONE' OR ($1='DEPARTMENT' AND u.department_id=ANY($2::uuid[])) OR ($1='TEAM' AND tm.team_id=ANY($2::uuid[])) OR ($1='ROLE' AND u.role_id=ANY($2::uuid[])) OR ($1='SELECTED' AND u.id=ANY($2::uuid[])))`,[row.audience_type,ids]);
+  for(const u of recipients.rows){await this.db.query(`INSERT INTO broadcast_recipients(broadcast_id,user_id,in_app_sent_at,email_status) VALUES($1,$2,CASE WHEN $3 IN('IN_APP','BOTH') THEN NOW() END,CASE WHEN $3 IN('EMAIL','BOTH') THEN 'PENDING_WORKSPACE' ELSE 'NOT_REQUESTED' END) ON CONFLICT DO NOTHING`,[row.id,u.id,row.channel]);if(['IN_APP','BOTH'].includes(row.channel))await this.db.query(`INSERT INTO notifications(user_id,title,body,kind,href,broadcast_id) VALUES($1,$2,$3,'BROADCAST','/home',$4)`,[u.id,row.title,row.body,row.id])}
+  await this.audit.log({actorUserId:userId,action:'BROADCAST_CREATED',module:'communications',entityType:'broadcast',entityId:row.id,newValues:{title:row.title,audienceType:row.audience_type,channel:row.channel,recipientCount:recipients.rows.length},ipAddress:ctx?.ipAddress,userAgent:ctx?.userAgent});
+  return {...row,recipient_count:recipients.rows.length};
+ }
 
  async reminders(userId:string,admin:boolean){return (await this.db.query(`SELECT cr.*,u.first_name,u.last_name FROM calendar_reminders cr JOIN users u ON u.id=cr.user_id WHERE ($1::boolean=true OR cr.user_id=$2) ORDER BY starts_at`,[admin,userId])).rows}
- async createReminder(userId:string,b:{title?:string;notes?:string;startsAt?:string;reminderAt?:string|null}){if(!b.title?.trim()||!b.startsAt)throw new BadRequestException('Title and date are required');const row=(await this.db.query(`INSERT INTO calendar_reminders(user_id,title,notes,starts_at,reminder_at) VALUES($1,$2,$3,$4,$5) RETURNING *`,[userId,b.title.trim(),b.notes?.trim()||null,b.startsAt,b.reminderAt||null])).rows[0];await this.audit.log({actorUserId:userId,action:'CALENDAR_REMINDER_CREATED',module:'calendar',entityType:'calendar_reminder',entityId:String(row.id),newValues:{title:row.title,startsAt:row.starts_at}});return row}
+ async createReminder(userId:string,b:{title?:string;notes?:string;startsAt?:string;reminderAt?:string|null},ctx?:AuditCtx){
+  if(!b.title?.trim()||!b.startsAt)throw new BadRequestException('Title and date are required');
+  const row=(await this.db.query(`INSERT INTO calendar_reminders(user_id,title,notes,starts_at,reminder_at) VALUES($1,$2,$3,$4,$5) RETURNING *`,[userId,b.title.trim(),b.notes?.trim()||null,b.startsAt,b.reminderAt||null])).rows[0];
+  await this.audit.log({actorUserId:userId,action:'CALENDAR_REMINDER_CREATED',module:'calendar',entityType:'calendar_reminder',entityId:String(row.id),newValues:{title:row.title,startsAt:row.starts_at,reminderAt:row.reminder_at},ipAddress:ctx?.ipAddress,userAgent:ctx?.userAgent});return row;
+ }
  async teamMembers(id:string){return (await this.db.query(`SELECT u.id,u.first_name,u.last_name,u.email,u.job_title,d.name department_name,(u.id=t.manager_id) is_team_lead FROM teams t JOIN team_members tm ON tm.team_id=t.id JOIN users u ON u.id=tm.user_id LEFT JOIN departments d ON d.id=u.department_id WHERE t.id=$1 ORDER BY (u.id=t.manager_id) DESC,u.first_name,u.last_name`,[id])).rows}
- async setTeamMembers(id:string,b:{memberIds?:string[];managerId?:string|null}){const ids=[...new Set(b.memberIds??[])];const c=await this.db.getClient();try{await c.query('BEGIN');await c.query(`DELETE FROM team_members WHERE team_id=$1`,[id]);for(const uid of ids)await c.query(`INSERT INTO team_members(team_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING`,[id,uid]);if(b.managerId){await c.query(`INSERT INTO team_members(team_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING`,[id,b.managerId]);}await c.query(`UPDATE teams SET manager_id=$2,updated_at=NOW() WHERE id=$1`,[id,b.managerId||null]);await c.query('COMMIT');return this.teamMembers(id)}catch(e){await c.query('ROLLBACK');throw e}finally{c.release()}}
+ async setTeamMembers(id:string,b:{memberIds?:string[];managerId?:string|null},ctx:AuditCtx){
+  const before=await this.teamMembers(id);const ids=[...new Set(b.memberIds??[])];const c=await this.db.getClient();
+  try{await c.query('BEGIN');await c.query(`DELETE FROM team_members WHERE team_id=$1`,[id]);for(const uid of ids)await c.query(`INSERT INTO team_members(team_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING`,[id,uid]);if(b.managerId){await c.query(`INSERT INTO team_members(team_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING`,[id,b.managerId]);}await c.query(`UPDATE teams SET manager_id=$2,updated_at=NOW() WHERE id=$1`,[id,b.managerId||null]);await c.query('COMMIT');
+   const after=await this.teamMembers(id);await this.audit.log({actorUserId:ctx.actorUserId,action:'TEAM_MEMBERS_UPDATED',module:'workforce',entityType:'team',entityId:id,oldValues:{memberIds:before.map((x:any)=>x.id)},newValues:{memberIds:after.map((x:any)=>x.id),managerId:b.managerId||null},ipAddress:ctx.ipAddress,userAgent:ctx.userAgent});return after;
+  }catch(e){await c.query('ROLLBACK');throw e}finally{c.release()}
+ }
  async staffOpsAnalytics(){
   const q=<T extends Record<string,any>>(label:string,sql:string,fallback:T[])=>this.analyticsQuery<T>(label,sql,fallback);
   const [revenue,crm,tasks,followups,communications,workforce,staff,departments,teams,stages,sources,industries,commercial,taskStatuses,taskPriorities,trends]=await Promise.all([
@@ -384,7 +430,7 @@ export class WorkspaceOpsService{
   ]);
   return{staff:staff.rows,departments:departments.rows,teams:teams.rows,roles:roles.rows,leads:leads.rows,tasks:tasks.rows}
  }
- async createSharedFolder(userId:string,admin:boolean,b:any){
+ async createSharedFolder(userId:string,admin:boolean,b:any,ctx?:AuditCtx){
   const name=b.name?.trim();
   if(!name)throw new BadRequestException('Folder name is required');
   const visibility=String(b.visibility||'PRIVATE').toUpperCase();
@@ -399,12 +445,19 @@ export class WorkspaceOpsService{
     if(ids.some(id=>!available[visibility]?.has(id)))throw new BadRequestException('One or more sharing targets are invalid or unavailable');
   }
   const status=admin?'PUBLISHED':(visibility==='PRIVATE'?'PUBLISHED':'PENDING');
-  return (await this.db.query(`INSERT INTO shared_folders(name,description,created_by_id,visibility,visibility_ids,publication_status) VALUES($1,$2,$3,$4,$5,$6) RETURNING *`,[name,b.description?.trim()||null,userId,visibility,ids,status])).rows[0]
+  const row=(await this.db.query(`INSERT INTO shared_folders(name,description,created_by_id,visibility,visibility_ids,publication_status) VALUES($1,$2,$3,$4,$5,$6) RETURNING *`,[name,b.description?.trim()||null,userId,visibility,ids,status])).rows[0];
+  await this.audit.log({actorUserId:userId,action:'SHARED_FOLDER_CREATED',module:'shared_files',entityType:'shared_folder',entityId:row.id,newValues:{name:row.name,visibility:row.visibility,publicationStatus:row.publication_status,targetCount:ids.length},ipAddress:ctx?.ipAddress,userAgent:ctx?.userAgent});
+  return row;
  }
- async approveSharedFolder(id:string,userId:string,status:'PUBLISHED'|'REJECTED'){const r=await this.db.query(`UPDATE shared_folders SET publication_status=$2,approved_by_id=CASE WHEN $2='PUBLISHED' THEN $3::uuid ELSE NULL END,approved_at=CASE WHEN $2='PUBLISHED' THEN NOW() ELSE NULL END,updated_at=NOW() WHERE id=$1 RETURNING *`,[id,status,userId]);if(!r.rows[0])throw new NotFoundException('Folder not found');return r.rows[0]}
- async sharedFiles(folderId:string,userId:string,admin:boolean){
+ async approveSharedFolder(id:string,userId:string,status:'PUBLISHED'|'REJECTED',ctx?:AuditCtx){
+  const before=(await this.db.query(`SELECT publication_status,name FROM shared_folders WHERE id=$1`,[id])).rows[0];
+  const r=await this.db.query(`UPDATE shared_folders SET publication_status=$2,approved_by_id=CASE WHEN $2='PUBLISHED' THEN $3::uuid ELSE NULL END,approved_at=CASE WHEN $2='PUBLISHED' THEN NOW() ELSE NULL END,updated_at=NOW() WHERE id=$1 RETURNING *`,[id,status,userId]);if(!r.rows[0])throw new NotFoundException('Folder not found');
+  await this.audit.log({actorUserId:userId,action:status==='PUBLISHED'?'SHARED_FOLDER_APPROVED':'SHARED_FOLDER_REJECTED',module:'shared_files',entityType:'shared_folder',entityId:id,oldValues:{publicationStatus:before?.publication_status},newValues:{publicationStatus:status,name:r.rows[0].name},ipAddress:ctx?.ipAddress,userAgent:ctx?.userAgent});
+  return r.rows[0];
+ }
+ async sharedFiles(folderId:string,userId:string,admin:boolean,ctx?:AuditCtx){
   const allowed=await this.sharedFolders(userId,admin);if(!allowed.some((f:any)=>f.id===folderId))throw new NotFoundException('Folder not found');
-  return (await this.db.query(`SELECT sf.*,u.first_name,u.last_name,
+  const rows=(await this.db.query(`SELECT sf.*,u.first_name,u.last_name,
     ($3::boolean OR sf.created_by_id=$2 OR EXISTS(SELECT 1 FROM shared_folders owner_folder WHERE owner_folder.id=sf.folder_id AND owner_folder.created_by_id=$2) OR EXISTS(
       SELECT 1 FROM shared_item_access ma LEFT JOIN users me ON me.id=$2
       WHERE ma.can_manage=true AND ((ma.item_type='FILE' AND ma.item_id=sf.id) OR (ma.item_type='FOLDER' AND ma.item_id=sf.folder_id)) AND (
@@ -420,10 +473,21 @@ export class WorkspaceOpsService{
           (a.subject_type='ROLE' AND a.subject_id=me.role_id) OR (a.subject_type='TEAM' AND EXISTS(SELECT 1 FROM team_members tm WHERE tm.user_id=$2 AND tm.team_id=a.subject_id))
         )
       )
-    ) ORDER BY sf.created_at DESC`,[folderId,userId,admin])).rows
+    ) ORDER BY sf.created_at DESC`,[folderId,userId,admin])).rows;
+  if(ctx)await this.audit.logOnce({actorUserId:userId,action:'SHARED_FOLDER_OPENED',module:'shared_files',entityType:'shared_folder',entityId:folderId,newValues:{visibleFileCount:rows.length},ipAddress:ctx.ipAddress,userAgent:ctx.userAgent},300);
+  return rows;
  }
- async uploadSharedFile(folderId:string,userId:string,admin:boolean,file:any){if(!file)throw new BadRequestException('File is required');await this.sharedFiles(folderId,userId,admin);const safe=String(file.originalname||'file').replace(/[^a-zA-Z0-9._-]/g,'_');const path=`shared/${folderId}/${randomUUID()}-${safe}`;const up=await this.supabase.admin.storage.from('task-attachments').upload(path,file.buffer,{contentType:file.mimetype,upsert:false});if(up.error)throw new BadRequestException('Upload failed');return (await this.db.query(`INSERT INTO shared_files(folder_id,created_by_id,file_name,mime_type,file_size,storage_path) VALUES($1,$2,$3,$4,$5,$6) RETURNING *`,[folderId,userId,file.originalname,file.mimetype,file.size,path])).rows[0]}
- async sharedFileDownload(id:string,userId:string,admin:boolean){const r=await this.db.query(`SELECT sf.*,f.id folder_id FROM shared_files sf JOIN shared_folders f ON f.id=sf.folder_id WHERE sf.id=$1`,[id]);const file=r.rows[0];if(!file)throw new NotFoundException('File not found');const visible=await this.sharedFiles(file.folder_id,userId,admin);if(!visible.some((row:any)=>row.id===id))throw new NotFoundException('File not found');const signed=await this.supabase.admin.storage.from(file.storage_bucket).createSignedUrl(file.storage_path,300);if(signed.error)throw new BadRequestException('Unable to download file');return{url:signed.data.signedUrl,fileName:file.file_name}}
+ async uploadSharedFile(folderId:string,userId:string,admin:boolean,file:any,ctx?:AuditCtx){
+  if(!file)throw new BadRequestException('File is required');await this.sharedFiles(folderId,userId,admin);const safe=String(file.originalname||'file').replace(/[^a-zA-Z0-9._-]/g,'_');const path=`shared/${folderId}/${randomUUID()}-${safe}`;const up=await this.supabase.admin.storage.from('task-attachments').upload(path,file.buffer,{contentType:file.mimetype,upsert:false});if(up.error)throw new BadRequestException('Upload failed');
+  const row=(await this.db.query(`INSERT INTO shared_files(folder_id,created_by_id,file_name,mime_type,file_size,storage_path) VALUES($1,$2,$3,$4,$5,$6) RETURNING *`,[folderId,userId,file.originalname,file.mimetype,file.size,path])).rows[0];
+  await this.audit.log({actorUserId:userId,action:'SHARED_FILE_UPLOADED',module:'shared_files',entityType:'shared_file',entityId:row.id,newValues:{folderId,fileName:row.file_name,mimeType:row.mime_type,fileSize:row.file_size},ipAddress:ctx?.ipAddress,userAgent:ctx?.userAgent});
+  return row;
+ }
+ async sharedFileDownload(id:string,userId:string,admin:boolean,ctx?:AuditCtx){
+  const r=await this.db.query(`SELECT sf.*,f.id folder_id FROM shared_files sf JOIN shared_folders f ON f.id=sf.folder_id WHERE sf.id=$1`,[id]);const file=r.rows[0];if(!file)throw new NotFoundException('File not found');const visible=await this.sharedFiles(file.folder_id,userId,admin);if(!visible.some((row:any)=>row.id===id))throw new NotFoundException('File not found');const signed=await this.supabase.admin.storage.from(file.storage_bucket).createSignedUrl(file.storage_path,300);if(signed.error)throw new BadRequestException('Unable to download file');
+  await this.audit.log({actorUserId:userId,action:'SHARED_FILE_DOWNLOADED',module:'shared_files',entityType:'shared_file',entityId:id,newValues:{folderId:file.folder_id,fileName:file.file_name,mimeType:file.mime_type,fileSize:file.file_size},ipAddress:ctx?.ipAddress,userAgent:ctx?.userAgent});
+  return{url:signed.data.signedUrl,fileName:file.file_name};
+ }
  async sharedItemAccess(itemType:'FOLDER'|'FILE',id:string,userId:string,admin:boolean){
   await this.assertSharedManage(itemType,id,userId,admin,false);
   const grants=(await this.db.query(`SELECT item_type,item_id,subject_type,subject_id,can_manage FROM shared_item_access WHERE item_type=$1 AND item_id=$2 ORDER BY subject_type,created_at`,[itemType,id])).rows;
@@ -434,14 +498,19 @@ export class WorkspaceOpsService{
   const item=(await this.db.query(`SELECT inherit_folder_access FROM shared_files WHERE id=$1`,[id])).rows[0];if(!item)throw new NotFoundException('File not found');
   return{itemType,id,everyone:false,publicationStatus:null,inheritFolderAccess:item.inherit_folder_access,grants}
  }
- async setSharedItemAccess(itemType:'FOLDER'|'FILE',id:string,userId:string,admin:boolean,b:any){
+ async setSharedItemAccess(itemType:'FOLDER'|'FILE',id:string,userId:string,admin:boolean,b:any,ctx?:AuditCtx){
   await this.assertSharedManage(itemType,id,userId,admin,true);
   const scopes=await this.sharedFolderScopes(userId,admin);
   const valid:Record<string,Set<string>>={STAFF:new Set(scopes.staff.map((x:any)=>x.id)),DEPARTMENT:new Set(scopes.departments.map((x:any)=>x.id)),TEAM:new Set(scopes.teams.map((x:any)=>x.id)),ROLE:new Set(scopes.roles.map((x:any)=>x.id))};
   const raw=Array.isArray(b.grants)?b.grants:[];
   const grants=raw.map((x:any)=>({subjectType:String(x.subjectType||'').toUpperCase(),subjectId:String(x.subjectId||''),canManage:Boolean(x.canManage)})).filter((x:any)=>valid[x.subjectType]?.has(x.subjectId));
   if(grants.length!==raw.length)throw new BadRequestException('One or more access targets are invalid');
-  const c=await this.db.getClient();try{await c.query('BEGIN');await c.query(`DELETE FROM shared_item_access WHERE item_type=$1 AND item_id=$2`,[itemType,id]);for(const grant of grants)await c.query(`INSERT INTO shared_item_access(item_type,item_id,subject_type,subject_id,can_manage,granted_by_id) VALUES($1,$2,$3,$4,$5,$6)`,[itemType,id,grant.subjectType,grant.subjectId,grant.canManage,userId]);if(itemType==='FOLDER'){const everyone=Boolean(b.everyone);await c.query(`UPDATE shared_folders SET visibility=$2,visibility_ids='{}'::uuid[],publication_status=CASE WHEN $3::boolean THEN 'PUBLISHED' WHEN NOT $3::boolean AND ($4::boolean OR $5::int>0) THEN 'PENDING' ELSE publication_status END,updated_at=NOW() WHERE id=$1`,[id,everyone?'EVERYONE':'PRIVATE',admin,everyone,grants.length])}else{await c.query(`UPDATE shared_files SET inherit_folder_access=$2 WHERE id=$1`,[id,b.inheritFolderAccess!==false])}await c.query('COMMIT');return this.sharedItemAccess(itemType,id,userId,admin)}catch(e){await c.query('ROLLBACK');throw e}finally{c.release()}
+  const before=await this.sharedItemAccess(itemType,id,userId,admin);
+  const c=await this.db.getClient();try{await c.query('BEGIN');await c.query(`DELETE FROM shared_item_access WHERE item_type=$1 AND item_id=$2`,[itemType,id]);for(const grant of grants)await c.query(`INSERT INTO shared_item_access(item_type,item_id,subject_type,subject_id,can_manage,granted_by_id) VALUES($1,$2,$3,$4,$5,$6)`,[itemType,id,grant.subjectType,grant.subjectId,grant.canManage,userId]);if(itemType==='FOLDER'){const everyone=Boolean(b.everyone);await c.query(`UPDATE shared_folders SET visibility=$2,visibility_ids='{}'::uuid[],publication_status=CASE WHEN $3::boolean THEN 'PUBLISHED' WHEN NOT $3::boolean AND ($4::boolean OR $5::int>0) THEN 'PENDING' ELSE publication_status END,updated_at=NOW() WHERE id=$1`,[id,everyone?'EVERYONE':'PRIVATE',admin,everyone,grants.length])}else{await c.query(`UPDATE shared_files SET inherit_folder_access=$2 WHERE id=$1`,[id,b.inheritFolderAccess!==false])}await c.query('COMMIT');
+   const after=await this.sharedItemAccess(itemType,id,userId,admin);
+   await this.audit.log({actorUserId:userId,action:'SHARED_ITEM_ACCESS_UPDATED',module:'shared_files',entityType:itemType==='FOLDER'?'shared_folder':'shared_file',entityId:id,oldValues:{everyone:before.everyone,inheritFolderAccess:before.inheritFolderAccess,grantCount:before.grants.length},newValues:{everyone:after.everyone,inheritFolderAccess:after.inheritFolderAccess,grantCount:after.grants.length},ipAddress:ctx?.ipAddress,userAgent:ctx?.userAgent});
+   return after;
+  }catch(e){await c.query('ROLLBACK');throw e}finally{c.release()}
  }
  private async assertSharedManage(itemType:'FOLDER'|'FILE',id:string,userId:string,admin:boolean,write:boolean){
   if(admin)return true;

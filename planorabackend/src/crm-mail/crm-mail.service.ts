@@ -114,42 +114,130 @@ export class CrmMailService {
       WHERE d.created_by_id=$1 ORDER BY d.updated_at DESC`, [actor.id])).rows;
   }
 
-  async saveDraft(actor: Actor, id: string | null, body: any) {
-    const to=this.parseEmails(body.to||'');const cc=this.parseEmails(body.cc||'');
-    const leadId=String(body.leadId||'').trim()||null;const templateId=String(body.templateId||'').trim()||null;
-    if(leadId) await this.contextRecord(actor, leadId);
-    if(templateId) await this.templateById(templateId);
-    if(id){
-      const row=(await this.db.query(`UPDATE crm_mail_drafts SET sender_label=$3,recipient_emails=$4,cc_emails=$5,subject=$6,body_text=$7,lead_id=$8,template_id=$9,updated_at=NOW() WHERE id=$1 AND created_by_id=$2 RETURNING *`,[id,actor.id,String(body.senderName||'').trim()||null,to,cc,String(body.subject||''),String(body.body||''),leadId,templateId])).rows[0];
-      if(!row)throw new NotFoundException('Draft not found');return row;
+  async saveDraft(actor: Actor, id: string | null, body: any, ctx?: Ctx) {
+    const to = this.parseEmails(body.to || '');
+    const cc = this.parseEmails(body.cc || '');
+    const leadId = String(body.leadId || '').trim() || null;
+    const templateId = String(body.templateId || '').trim() || null;
+    if (leadId) await this.contextRecord(actor, leadId);
+    if (templateId) await this.templateById(templateId);
+
+    if (id) {
+      const before = (await this.db.query(
+        `SELECT id,subject,lead_id,template_id,recipient_emails,cc_emails FROM crm_mail_drafts WHERE id=$1 AND created_by_id=$2`,
+        [id, actor.id],
+      )).rows[0];
+      if (!before) throw new NotFoundException('Draft not found');
+      const row = (await this.db.query(
+        `UPDATE crm_mail_drafts
+         SET sender_label=$3,recipient_emails=$4,cc_emails=$5,subject=$6,body_text=$7,lead_id=$8,template_id=$9,updated_at=NOW()
+         WHERE id=$1 AND created_by_id=$2 RETURNING *`,
+        [id, actor.id, String(body.senderName || '').trim() || null, to, cc, String(body.subject || ''), String(body.body || ''), leadId, templateId],
+      )).rows[0];
+      await this.audit.log({
+        actorUserId: actor.id,
+        action: 'MAIL_DRAFT_UPDATED',
+        module: 'communications',
+        entityType: 'mail_draft',
+        entityId: id,
+        oldValues: { subject: before.subject, leadId: before.lead_id, templateId: before.template_id, recipientCount: (before.recipient_emails || []).length, ccCount: (before.cc_emails || []).length },
+        newValues: { subject: row.subject, leadId: row.lead_id, templateId: row.template_id, recipientCount: (row.recipient_emails || []).length, ccCount: (row.cc_emails || []).length },
+        ipAddress: ctx?.ipAddress,
+        userAgent: ctx?.userAgent,
+      });
+      return row;
     }
-    return (await this.db.query(`INSERT INTO crm_mail_drafts(created_by_id,sender_label,recipient_emails,cc_emails,subject,body_text,lead_id,template_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,[actor.id,String(body.senderName||'').trim()||null,to,cc,String(body.subject||''),String(body.body||''),leadId,templateId])).rows[0];
+
+    const row = (await this.db.query(
+      `INSERT INTO crm_mail_drafts(created_by_id,sender_label,recipient_emails,cc_emails,subject,body_text,lead_id,template_id)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+      [actor.id, String(body.senderName || '').trim() || null, to, cc, String(body.subject || ''), String(body.body || ''), leadId, templateId],
+    )).rows[0];
+    await this.audit.log({
+      actorUserId: actor.id,
+      action: 'MAIL_DRAFT_CREATED',
+      module: 'communications',
+      entityType: 'mail_draft',
+      entityId: row.id,
+      newValues: { subject: row.subject, leadId: row.lead_id, templateId: row.template_id, recipientCount: (row.recipient_emails || []).length, ccCount: (row.cc_emails || []).length },
+      ipAddress: ctx?.ipAddress,
+      userAgent: ctx?.userAgent,
+    });
+    return row;
   }
 
-  async deleteDraft(actor: Actor,id:string){
-    const row=(await this.db.query(`DELETE FROM crm_mail_drafts WHERE id=$1 AND created_by_id=$2 RETURNING id`,[id,actor.id])).rows[0];
-    if(!row)throw new NotFoundException('Draft not found');return true;
+  async deleteDraft(actor: Actor, id: string, ctx?: Ctx) {
+    const row = (await this.db.query(
+      `DELETE FROM crm_mail_drafts WHERE id=$1 AND created_by_id=$2 RETURNING id,subject,lead_id,template_id,recipient_emails`,
+      [id, actor.id],
+    )).rows[0];
+    if (!row) throw new NotFoundException('Draft not found');
+    await this.audit.log({
+      actorUserId: actor.id,
+      action: 'MAIL_DRAFT_DELETED',
+      module: 'communications',
+      entityType: 'mail_draft',
+      entityId: id,
+      oldValues: { subject: row.subject, leadId: row.lead_id, templateId: row.template_id, recipientCount: (row.recipient_emails || []).length },
+      ipAddress: ctx?.ipAddress,
+      userAgent: ctx?.userAgent,
+    });
+    return true;
   }
 
   async templates(actor: Actor) {
-    const admin=actor.roleCode==='SUPER_ADMIN';
-    return (await this.db.query(`SELECT t.*,u.first_name,u.last_name FROM crm_mail_templates t LEFT JOIN users u ON u.id=t.created_by_id WHERE $1::boolean OR t.is_active=true ORDER BY t.is_default DESC,t.is_active DESC,t.name`,[admin])).rows;
+    const admin = actor.roleCode === 'SUPER_ADMIN';
+    return (await this.db.query(
+      `SELECT t.*,u.first_name,u.last_name FROM crm_mail_templates t LEFT JOIN users u ON u.id=t.created_by_id WHERE $1::boolean OR t.is_active=true ORDER BY t.is_default DESC,t.is_active DESC,t.name`,
+      [admin],
+    )).rows;
   }
 
-  async createTemplate(actor: Actor, body: any) {
-    if(actor.roleCode!=='SUPER_ADMIN')throw new ForbiddenException('Only Super Admin can manage mail templates');
-    const name=String(body.name||'').trim();const html=String(body.html||'').trim();
-    if(!name||!html)throw new BadRequestException('Template name and HTML are required');
-    if(!html.includes('{{body}}'))throw new BadRequestException('Template HTML must include {{body}}');
-    return (await this.db.query(`INSERT INTO crm_mail_templates(name,description,html,is_default,is_active,created_by_id) VALUES($1,$2,$3,false,true,$4) RETURNING *`,[name,String(body.description||'').trim()||null,html,actor.id])).rows[0];
+  async createTemplate(actor: Actor, body: any, ctx?: Ctx) {
+    if (actor.roleCode !== 'SUPER_ADMIN') throw new ForbiddenException('Only Super Admin can manage mail templates');
+    const name = String(body.name || '').trim();
+    const html = String(body.html || '').trim();
+    if (!name || !html) throw new BadRequestException('Template name and HTML are required');
+    if (!html.includes('{{body}}')) throw new BadRequestException('Template HTML must include {{body}}');
+    const row = (await this.db.query(
+      `INSERT INTO crm_mail_templates(name,description,html,is_default,is_active,created_by_id) VALUES($1,$2,$3,false,true,$4) RETURNING *`,
+      [name, String(body.description || '').trim() || null, html, actor.id],
+    )).rows[0];
+    await this.audit.log({
+      actorUserId: actor.id,
+      action: 'MAIL_TEMPLATE_CREATED',
+      module: 'communications',
+      entityType: 'mail_template',
+      entityId: row.id,
+      newValues: { name: row.name, isDefault: row.is_default, isActive: row.is_active },
+      ipAddress: ctx?.ipAddress,
+      userAgent: ctx?.userAgent,
+    });
+    return row;
   }
 
-  async updateTemplate(actor: Actor,id:string,body:any){
-    if(actor.roleCode!=='SUPER_ADMIN')throw new ForbiddenException('Only Super Admin can manage mail templates');
-    const current=await this.templateById(id);const html=body.html===undefined?current.html:String(body.html||'').trim();
-    if(!html.includes('{{body}}'))throw new BadRequestException('Template HTML must include {{body}}');
-    if(body.isDefault===true)await this.db.query(`UPDATE crm_mail_templates SET is_default=false WHERE id<>$1`,[id]);
-    return (await this.db.query(`UPDATE crm_mail_templates SET name=COALESCE(NULLIF($2,''),name),description=$3,html=$4,is_default=COALESCE($5,is_default),is_active=COALESCE($6,is_active),updated_at=NOW() WHERE id=$1 RETURNING *`,[id,String(body.name??'').trim(),body.description===undefined?current.description:String(body.description||'').trim()||null,html,body.isDefault??null,body.isActive??null])).rows[0];
+  async updateTemplate(actor: Actor, id: string, body: any, ctx?: Ctx) {
+    if (actor.roleCode !== 'SUPER_ADMIN') throw new ForbiddenException('Only Super Admin can manage mail templates');
+    const current = await this.templateById(id);
+    const html = body.html === undefined ? current.html : String(body.html || '').trim();
+    if (!html.includes('{{body}}')) throw new BadRequestException('Template HTML must include {{body}}');
+    if (body.isDefault === true) await this.db.query(`UPDATE crm_mail_templates SET is_default=false WHERE id<>$1`, [id]);
+    const row = (await this.db.query(
+      `UPDATE crm_mail_templates SET name=COALESCE(NULLIF($2,''),name),description=$3,html=$4,is_default=COALESCE($5,is_default),is_active=COALESCE($6,is_active),updated_at=NOW() WHERE id=$1 RETURNING *`,
+      [id, String(body.name ?? '').trim(), body.description === undefined ? current.description : String(body.description || '').trim() || null, html, body.isDefault ?? null, body.isActive ?? null],
+    )).rows[0];
+    await this.audit.log({
+      actorUserId: actor.id,
+      action: 'MAIL_TEMPLATE_UPDATED',
+      module: 'communications',
+      entityType: 'mail_template',
+      entityId: id,
+      oldValues: { name: current.name, isDefault: current.is_default, isActive: current.is_active },
+      newValues: { name: row.name, isDefault: row.is_default, isActive: row.is_active },
+      ipAddress: ctx?.ipAddress,
+      userAgent: ctx?.userAgent,
+    });
+    return row;
   }
 
   private async templateById(id:string|null){
@@ -249,12 +337,22 @@ export class CrmMailService {
     return this.thread(actor, threadId);
   }
 
-  async attachment(actor: Actor, id: string) {
+  async attachment(actor: Actor, id: string, ctx?: Ctx) {
     const row = (await this.db.query(`SELECT a.*,m.thread_id FROM crm_mail_attachments a JOIN crm_mail_messages m ON m.id=a.message_id WHERE a.id=$1`, [id])).rows[0];
     if (!row) throw new NotFoundException('Attachment not found');
     await this.assertThreadAccess(actor, row.thread_id);
     const signed = await this.supabase.admin.storage.from(row.storage_bucket).createSignedUrl(row.storage_path, 300);
     if (signed.error) throw new BadRequestException('Unable to open attachment');
+    await this.audit.log({
+      actorUserId: actor.id,
+      action: 'MAIL_ATTACHMENT_OPENED',
+      module: 'communications',
+      entityType: 'mail_attachment',
+      entityId: id,
+      newValues: { threadId: row.thread_id, fileName: row.file_name, fileSize: row.file_size },
+      ipAddress: ctx?.ipAddress,
+      userAgent: ctx?.userAgent,
+    });
     return { url: signed.data.signedUrl, fileName: row.file_name };
   }
 

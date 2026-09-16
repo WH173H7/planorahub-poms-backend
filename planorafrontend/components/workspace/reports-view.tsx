@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Modal } from '@/components/ui/modal';
 import {
+  auditCompanyReportDownload,
   emailCompanyReport,
   getCompanyReport,
   type CompanyReport,
@@ -120,6 +121,9 @@ export function ReportsView() {
   function exportReport() {
     if (!data) return;
     downloadCsv(data);
+    void auditCompanyReportDownload(filters).catch(() => {
+      // Audit telemetry must never block the Admin's local export.
+    });
     setEmailResult(null);
     setEmailPromptOpen(true);
   }

@@ -19,29 +19,6 @@ export class AuthController {
   @AllowPasswordChangePending()
   async me(@Req() request: AuthenticatedRequest) {
     const userId = request.user!.id;
-    const previousLogin = (await this.db.query<{ last_login_at: string | null }>(
-      `SELECT last_login_at FROM users WHERE id=$1 LIMIT 1`,
-      [userId],
-    )).rows[0]?.last_login_at ?? null;
-
-    await this.db.query(
-      `UPDATE users SET last_login_at=NOW(),updated_at=NOW() WHERE id=$1`,
-      [userId],
-    );
-
-    const shouldLogSession = !previousLogin || (Date.now() - new Date(previousLogin).getTime()) > 30 * 60 * 1000;
-    if (shouldLogSession) {
-      await this.audit.log({
-        actorUserId: userId,
-        action: 'CRM_SESSION_OPENED',
-        module: 'auth',
-        entityType: 'user_session',
-        entityId: userId,
-        newValues: { previousLoginAt: previousLogin },
-        ipAddress: request.ip,
-        userAgent: request.headers['user-agent'],
-      });
-    }
 
     const result = await this.db.query(
       `
@@ -71,6 +48,52 @@ export class AuthController {
     const permissions = await this.permissions.getEffectivePermissions(userId);
 
     return { success: true, data: { ...profile, permissions } };
+  }
+
+  @Post('session-open')
+  @UseGuards(AuthGuard)
+  @AllowPasswordChangePending()
+  async sessionOpen(@Req() request: AuthenticatedRequest) {
+    const userId = request.user!.id;
+    const previousLogin = (await this.db.query<{ last_login_at: string | null }>(
+      `SELECT last_login_at FROM users WHERE id=$1 LIMIT 1`,
+      [userId],
+    )).rows[0]?.last_login_at ?? null;
+
+    await this.db.query(
+      `UPDATE users SET last_login_at=NOW(),updated_at=NOW() WHERE id=$1`,
+      [userId],
+    );
+
+    await this.audit.log({
+      actorUserId: userId,
+      action: 'CRM_SESSION_OPENED',
+      module: 'auth',
+      entityType: 'user_session',
+      entityId: userId,
+      newValues: { previousLoginAt: previousLogin },
+      ipAddress: request.ip,
+      userAgent: request.headers['user-agent'],
+    });
+
+    return { success: true, data: true };
+  }
+
+  @Post('logout')
+  @UseGuards(AuthGuard)
+  @AllowPasswordChangePending()
+  async logout(@Req() request: AuthenticatedRequest) {
+    const userId = request.user!.id;
+    await this.audit.log({
+      actorUserId: userId,
+      action: 'CRM_SESSION_CLOSED',
+      module: 'auth',
+      entityType: 'user_session',
+      entityId: userId,
+      ipAddress: request.ip,
+      userAgent: request.headers['user-agent'],
+    });
+    return { success: true, data: true };
   }
 
   @Post('password-changed')

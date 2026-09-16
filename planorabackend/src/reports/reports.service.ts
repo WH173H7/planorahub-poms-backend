@@ -1,7 +1,9 @@
 import {BadRequestException,Injectable} from '@nestjs/common';
 import {DatabaseService} from '../database/database.service.js';
 import {StaffMailService} from '../mailer/staff-mail.service.js';
+import {AuditService} from '../audit/audit.service.js';
 
+type AuditCtx={actorUserId:string;ipAddress?:string;userAgent?:string};
 type ReportFilters={
   from?:string;to?:string;staffId?:string;departmentId?:string;organizationId?:string;
   recordType?:string;leadStage?:string;taskStatus?:string;focus?:string;
@@ -9,7 +11,7 @@ type ReportFilters={
 
 @Injectable()
 export class ReportsService{
-  constructor(private readonly db:DatabaseService,private readonly mail:StaffMailService){}
+  constructor(private readonly db:DatabaseService,private readonly mail:StaffMailService,private readonly audit:AuditService){}
 
   async company(filters:ReportFilters={}){
     const leadParams=[filters.from||null,filters.to||null,filters.staffId||null,filters.departmentId||null,filters.organizationId||null,filters.recordType||null,filters.leadStage||null];
@@ -103,7 +105,7 @@ export class ReportsService{
     };
   }
 
-  async emailCompanyReport(filters:ReportFilters,recipient:string){
+  async emailCompanyReport(filters:ReportFilters,recipient:string,ctx?:AuditCtx){
     const data=await this.company(filters);
     const csv=this.csv(data);
     const date=new Date().toISOString().slice(0,10);
@@ -117,7 +119,14 @@ export class ReportsService{
       idempotencyKey:`management-report/${recipient}/${Date.now()}`,
     });
     if(delivery.status!=='SENT')throw new BadRequestException(delivery.message);
+    await this.audit.log({actorUserId:ctx?.actorUserId,action:'REPORT_EMAILED',module:'reports',entityType:'management_report',newValues:{recipient,filename,filters:{...filters}},ipAddress:ctx?.ipAddress,userAgent:ctx?.userAgent});
     return{recipient,filename,status:delivery.status};
+  }
+
+  async auditReport(action:'REPORT_GENERATED'|'REPORT_DOWNLOADED',filters:ReportFilters,ctx:AuditCtx){
+    const input={actorUserId:ctx.actorUserId,action,module:'reports',entityType:'management_report',newValues:{filters:{...filters}},ipAddress:ctx.ipAddress,userAgent:ctx.userAgent};
+    if(action==='REPORT_GENERATED')await this.audit.logOnce(input,60);else await this.audit.log(input);
+    return true;
   }
 
   private csv(data:any){

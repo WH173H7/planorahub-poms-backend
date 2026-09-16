@@ -12,50 +12,36 @@ export class InternalChatController{
 
   @Get('channels')
   @RequirePermission('chat.read')
-  async channels(@Req()r:AuthenticatedRequest){
-    return{success:true,data:await this.service.channels(r.user!.id,r.user!.roleCode)};
-  }
+  async channels(@Req()r:AuthenticatedRequest){return{success:true,data:await this.service.channels(r.user!.id,r.user!.roleCode)}}
 
   @Post('channels')
   @RequirePermission('chat.manage')
-  async create(@Body()b:any,@Req()r:AuthenticatedRequest,@Headers('user-agent')ua?:string){
-    return{success:true,data:await this.service.createChannel(b,{actorUserId:r.user!.id,ipAddress:r.ip,userAgent:ua})};
-  }
+  async create(@Body()b:any,@Req()r:AuthenticatedRequest,@Headers('user-agent')ua?:string){return{success:true,data:await this.service.createChannel(b,this.ctx(r,ua))}}
 
   @Get('channels/:id/messages')
   @RequirePermission('chat.read')
-  async messages(@Param('id')id:string,@Query('before')before:string|undefined,@Req()r:AuthenticatedRequest){
-    return{success:true,data:await this.service.messages(id,r.user!.id,r.user!.roleCode,before)};
-  }
+  async messages(@Param('id')id:string,@Query('before')before:string|undefined,@Req()r:AuthenticatedRequest){return{success:true,data:await this.service.messages(id,r.user!.id,r.user!.roleCode,before)}}
 
   @Post('channels/:id/messages')
   @RequirePermission('chat.send')
-  async send(@Param('id')id:string,@Body()b:{body:string;replyToId?:string|null},@Req()r:AuthenticatedRequest){
-    return{success:true,data:await this.service.send(id,b.body,r.user!.id,r.user!.roleCode,b.replyToId||null)};
-  }
+  async send(@Param('id')id:string,@Body()b:{body:string;replyToId?:string|null},@Req()r:AuthenticatedRequest,@Headers('user-agent')ua?:string){return{success:true,data:await this.service.send(id,b.body,r.user!.id,r.user!.roleCode,b.replyToId||null,this.ctx(r,ua))}}
 
   @Post('channels/:id/attachments')
   @RequirePermission('chat.send')
   @UseInterceptors(FileInterceptor('file',{limits:{fileSize:10*1024*1024,files:1}}))
-  async attachment(@Param('id')id:string,@UploadedFile()file:any,@Req()r:AuthenticatedRequest){
-    return{success:true,data:await this.service.upload(id,file,r.user!.id,r.user!.roleCode)};
-  }
+  async attachment(@Param('id')id:string,@UploadedFile()file:any,@Req()r:AuthenticatedRequest,@Headers('user-agent')ua?:string){return{success:true,data:await this.service.upload(id,file,r.user!.id,r.user!.roleCode,this.ctx(r,ua))}}
 
   @Get('attachments/:id')
   @RequirePermission('chat.read')
-  async openAttachment(@Param('id')id:string,@Req()r:AuthenticatedRequest){
-    return{success:true,data:await this.service.attachment(id,r.user!.id,r.user!.roleCode)};
-  }
+  async openAttachment(@Param('id')id:string,@Req()r:AuthenticatedRequest,@Headers('user-agent')ua?:string){return{success:true,data:await this.service.attachment(id,r.user!.id,r.user!.roleCode,this.ctx(r,ua))}}
 
   @Patch('messages/:id')
   @RequirePermission('chat.send')
-  async edit(@Param('id')id:string,@Body()b:{body:string},@Req()r:AuthenticatedRequest){
-    return{success:true,data:await this.service.edit(id,b.body,r.user!.id)};
-  }
+  async edit(@Param('id')id:string,@Body()b:{body:string},@Req()r:AuthenticatedRequest,@Headers('user-agent')ua?:string){return{success:true,data:await this.service.edit(id,b.body,r.user!.id,this.ctx(r,ua))}}
 
   @Delete('messages/:id')
   @RequirePermission('chat.send')
-  async remove(@Param('id')id:string,@Req()r:AuthenticatedRequest){
-    return{success:true,data:await this.service.remove(id,r.user!.id,r.user!.roleCode)};
-  }
+  async remove(@Param('id')id:string,@Req()r:AuthenticatedRequest,@Headers('user-agent')ua?:string){return{success:true,data:await this.service.remove(id,r.user!.id,r.user!.roleCode,this.ctx(r,ua))}}
+
+  private ctx(r:AuthenticatedRequest,userAgent?:string){return{actorUserId:r.user!.id,ipAddress:r.ip,userAgent}}
 }

@@ -228,12 +228,15 @@ export class TasksController {
   async downloadAttachment(
     @Param('id') id: string,
     @Param('attachmentId') attachmentId: string,
+    @Req() req: AuthenticatedRequest,
+    @Headers('user-agent') ua?: string,
   ) {
     return {
       success: true,
       data: await this.tasks.getAttachmentDownload(
         id,
         attachmentId,
+        this.ctx(req, ua),
       ),
     };
   }
