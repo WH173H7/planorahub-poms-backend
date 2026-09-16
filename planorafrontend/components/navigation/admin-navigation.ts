@@ -15,7 +15,6 @@ export const adminNavigation: NavigationSection[] = [
     { label: 'Calendar', href: '/calendar', icon: 'calendar' },
   ]},
   { label: 'Communication', items: [
-    { label: 'Messenger', href: '/internal-chat', icon: 'chat' },
     { label: 'Email', href: '/email', icon: 'email' },
     { label: 'Broadcasts', href: '/broadcasts', icon: 'notifications' },
     { label: 'Official Letters', href: '/letterhead', icon: 'letter' },

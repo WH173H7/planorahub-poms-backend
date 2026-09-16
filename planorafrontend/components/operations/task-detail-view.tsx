@@ -47,7 +47,7 @@ export function TaskDetailView({taskId}:{taskId:string}){
     if((action==='CANCEL'||action==='COMPLETE')&&!window.confirm(action==='CANCEL'?'Cancel this task?':'Mark this task completed?'))return;
     setBusy(true);try{await controlTask(taskId,action);await load()}finally{setBusy(false)}
   }
-  async function upload(e:ChangeEvent<HTMLInputElement>){const file=e.target.files?.[0];if(!file)return;setUploading(true);try{await uploadTaskAttachment(taskId,file,staffMode);await load()}finally{setUploading(false);e.target.value=''}}
+  async function upload(e:ChangeEvent<HTMLInputElement>){const file=e.target.files?.[0];if(!file)return;setUploading(true);try{await uploadTaskAttachment(taskId,file,staffMode ?? undefined);await load()}finally{setUploading(false);e.target.value=''}}
 
   const target=assignmentName(task);
   const worker=task.accepted_by_id?person(task.accepted_by_first_name,task.accepted_by_last_name):null;

@@ -59,7 +59,7 @@ function activityHref(item: DashboardData['recent'][number]) {
       return '/email';
     case 'direct_chat_message':
     case 'chat_channel':
-      return '/internal-chat';
+      return '/activities';
     default:
       return '/audit-logs';
   }

@@ -1,5 +1,7 @@
 'use client';
 
+import type {ReactNode} from 'react';
+
 import {useCallback,useEffect,useMemo,useState} from 'react';
 import {AppShell} from '@/components/shell/app-shell';
 import {Button} from '@/components/ui/button';

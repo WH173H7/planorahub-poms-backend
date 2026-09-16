@@ -226,9 +226,9 @@ export function ChangeStageDialog({
     setError(null);
     const data = new FormData(event.currentTarget);
     const expectedRaw = String(data.get('expectedRevenue') ?? '').trim();
-    const expectedRevenue = prospectReview ? Number(expectedRaw) : null;
+    const expectedRevenue: number | null = prospectReview && expectedRaw ? Number(expectedRaw) : null;
 
-    if (prospectReview && (!expectedRaw || !Number.isFinite(expectedRevenue) || expectedRevenue <= 0)) {
+    if (prospectReview && (expectedRevenue === null || !Number.isFinite(expectedRevenue) || expectedRevenue <= 0)) {
       setError('Enter the expected revenue before submitting this Lead for Prospect Review.');
       setSaving(false);
       return;
