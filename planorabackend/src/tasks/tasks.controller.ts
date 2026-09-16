@@ -124,6 +124,17 @@ export class TasksController {
     };
   }
 
+  @Post(':id/control')
+  @RequirePermission('tasks.control')
+  async control(
+    @Param('id') id:string,
+    @Body() body:{action:'PAUSE'|'RESUME'|'CANCEL'|'COMPLETE'|'REOPEN'|'DISPATCH_NOW'},
+    @Req() req:AuthenticatedRequest,
+    @Headers('user-agent') ua?:string,
+  ){
+    return {success:true,data:await this.tasks.controlTask(id,body.action,this.ctx(req,ua))};
+  }
+
   @Post(':id/review')
   @RequirePermission('tasks.update.all')
   async reviewSubmission(@Param('id') id:string,@Body() body:{decision:'APPROVE'|'REVISION';message?:string},@Req() req:AuthenticatedRequest,@Headers('user-agent') ua?:string){

@@ -1,7 +1,7 @@
 'use client';
 
-import type { FocusEvent, ReactNode } from 'react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { usePathname } from 'next/navigation';
 
 import { adminNavigation } from '@/components/navigation/admin-navigation';
@@ -28,6 +28,8 @@ type AppShellProps = {
   children: ReactNode;
 };
 
+const SIDEBAR_KEY = 'planorahub.sidebar.collapsed';
+
 export function AppShell({
   area,
   title,
@@ -38,26 +40,31 @@ export function AppShell({
   children,
 }: AppShellProps) {
   const path = usePathname();
-
   const [user, setUser] = useState<CrmUser | null>(null);
-  const [desktopSidebarExpanded, setDesktopSidebarExpanded] =
-    useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  const collapseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
-    null,
-  );
+  useEffect(() => {
+    const saved = window.localStorage.getItem(SIDEBAR_KEY);
+    if (saved === 'true' || saved === 'false') {
+      setSidebarCollapsed(saved === 'true');
+      return;
+    }
+
+    setSidebarCollapsed(window.innerWidth < 1180);
+  }, []);
 
   useEffect(() => {
     async function authorize() {
       try {
         const current = await getCurrentCrmUser();
+        if (current.must_change_password) {
+          window.location.replace('/change-password');
+          return;
+        }
         const admin = hasAdministrativeAccess(current);
 
-        if (
-          (area === 'admin' && !admin) ||
-          (area === 'staff' && admin)
-        ) {
+        if ((area === 'admin' && !admin) || (area === 'staff' && admin)) {
           window.location.replace(routeForUser(current));
           return;
         }
@@ -71,52 +78,27 @@ export function AppShell({
     void authorize();
   }, [area]);
 
-  useEffect(() => {
-    return () => {
-      if (collapseTimerRef.current) {
-        clearTimeout(collapseTimerRef.current);
-      }
-    };
+  const closeMobile = useCallback(() => setMobileOpen(false), []);
+
+  const toggleSidebar = useCallback(() => {
+    setSidebarCollapsed((current) => {
+      const next = !current;
+      window.localStorage.setItem(SIDEBAR_KEY, String(next));
+      return next;
+    });
   }, []);
 
-  const closeMobile = useCallback(() => {
-    setMobileOpen(false);
-  }, []);
+  const expandSidebarFromNavigation = useCallback(() => {
+    if (!sidebarCollapsed) return;
+    setSidebarCollapsed(false);
+    window.localStorage.setItem(SIDEBAR_KEY, 'false');
+  }, [sidebarCollapsed]);
 
-  const expandDesktopSidebar = useCallback(() => {
-    if (collapseTimerRef.current) {
-      clearTimeout(collapseTimerRef.current);
-      collapseTimerRef.current = null;
-    }
-
-    setDesktopSidebarExpanded(true);
-  }, []);
-
-  const scheduleDesktopSidebarCollapse = useCallback(() => {
-    if (collapseTimerRef.current) {
-      clearTimeout(collapseTimerRef.current);
-    }
-
-    collapseTimerRef.current = setTimeout(() => {
-      setDesktopSidebarExpanded(false);
-    }, 220);
-  }, []);
-
-  const handleSidebarBlur = useCallback(
-    (event: FocusEvent<HTMLDivElement>) => {
-      const nextTarget = event.relatedTarget;
-
-      if (
-        nextTarget instanceof Node &&
-        event.currentTarget.contains(nextTarget)
-      ) {
-        return;
-      }
-
-      scheduleDesktopSidebarCollapse();
-    },
-    [scheduleDesktopSidebarCollapse],
-  );
+  const collapseSidebarFromPageInteraction = useCallback(() => {
+    if (sidebarCollapsed) return;
+    setSidebarCollapsed(true);
+    window.localStorage.setItem(SIDEBAR_KEY, 'true');
+  }, [sidebarCollapsed]);
 
   if (!user) {
     return (
@@ -130,17 +112,12 @@ export function AppShell({
   }
 
   const navigation =
-    area === 'admin' || (area === 'auto' && hasAdministrativeAccess(user)) ? adminNavigation : staffNavigation;
+    area === 'admin' || (area === 'auto' && hasAdministrativeAccess(user))
+      ? adminNavigation
+      : staffNavigation;
 
   const hour = new Date().getHours();
-
-  const greeting =
-    hour < 12
-      ? 'Good morning'
-      : hour < 18
-        ? 'Good afternoon'
-        : 'Good evening';
-
+  const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
   const personal =
     personalize === 'welcome'
       ? `Welcome back, ${user.first_name}.`
@@ -149,21 +126,14 @@ export function AppShell({
         : '';
 
   return (
-    <div
-      className="app-shell"
-      data-sidebar-expanded={desktopSidebarExpanded}
-    >
-      <div
-        className="desktop-sidebar"
-        onPointerEnter={expandDesktopSidebar}
-        onPointerLeave={scheduleDesktopSidebarCollapse}
-        onFocusCapture={expandDesktopSidebar}
-        onBlurCapture={handleSidebarBlur}
-      >
+    <div className="app-shell" data-sidebar-collapsed={sidebarCollapsed}>
+      <div className="desktop-sidebar">
         <AppSidebar
           navigation={navigation}
           path={path}
-          collapsed={!desktopSidebarExpanded}
+          collapsed={sidebarCollapsed}
+          onNavigate={expandSidebarFromNavigation}
+          onToggleCollapsed={toggleSidebar}
         />
       </div>
 
@@ -174,7 +144,7 @@ export function AppShell({
         path={path}
       />
 
-      <div className="app-main">
+      <div className="app-main" onPointerDownCapture={collapseSidebarFromPageInteraction}>
         <AppTopbar
           user={user}
           title={title}
@@ -189,11 +159,11 @@ export function AppShell({
               description={`${personal} ${description ?? ''}`.trim()}
               actions={actions}
             />
-
             {children}
           </PageContainer>
         </main>
       </div>
+
       <FloatingChat />
     </div>
   );

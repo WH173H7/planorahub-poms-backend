@@ -22,10 +22,10 @@ import { UsersModule } from './users/users.module.js';
 import { TaskWorkflowsModule } from './task-workflows/task-workflows.module.js';
 import { CommunicationsModule } from './communications/communications.module.js';
 import { InternalChatModule } from './internal-chat/internal-chat.module.js';
-import { GmailModule } from './gmail/gmail.module.js';
 import { ReportsModule } from './reports/reports.module.js';
 import { LetterheadModule } from './letterhead/letterhead.module.js';
 import { WorkspaceOpsModule } from './workspace-ops/workspace-ops.module.js';
+import { CrmMailModule } from './crm-mail/crm-mail.module.js';
 
 @Module({
   imports: [
@@ -52,10 +52,10 @@ import { WorkspaceOpsModule } from './workspace-ops/workspace-ops.module.js';
     TaskWorkflowsModule,
     CommunicationsModule,
     InternalChatModule,
-    GmailModule,
     ReportsModule,
     LetterheadModule,
     WorkspaceOpsModule,
+    CrmMailModule,
   ],
   controllers: [AppController],
   providers: [AppService],

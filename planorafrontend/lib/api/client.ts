@@ -17,7 +17,10 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
   let body: unknown;
   try { body = text ? JSON.parse(text) : null; } catch { throw new Error(`API returned non-JSON response: ${text}`); }
   if (!response.ok) {
-    const errorBody = body as { message?: string | string[] };
+    const errorBody = body as { message?: string | string[]; code?: string };
+    if (response.status === 403 && errorBody?.code === 'PASSWORD_CHANGE_REQUIRED' && typeof window !== 'undefined') {
+      window.location.replace('/change-password');
+    }
     const message = Array.isArray(errorBody?.message) ? errorBody.message.join(', ') : errorBody?.message;
     throw new Error(message ?? `API request failed with status ${response.status}`);
   }

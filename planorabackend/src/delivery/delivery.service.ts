@@ -1,11 +1,12 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from '../database/database.service.js';
 import { AuditService } from '../audit/audit.service.js';
+import { StaffMailService } from '../mailer/staff-mail.service.js';
 
 type Ctx={actorUserId?:string;ipAddress?:string;userAgent?:string};
 @Injectable()
 export class DeliveryService {
-  constructor(private readonly db:DatabaseService,private readonly audit:AuditService){}
+  constructor(private readonly db:DatabaseService,private readonly audit:AuditService,private readonly mail:StaffMailService){}
 
   async dashboard(){
     const [kpi,stages,staff,recent,upcoming]=await Promise.all([
@@ -25,8 +26,8 @@ export class DeliveryService {
         COUNT(DISTINCT l.id) FILTER(WHERE l.record_type='LEAD')::int assigned_leads
         FROM users u LEFT JOIN tasks t ON t.assigned_to_id=u.id LEFT JOIN leads l ON l.assigned_to_id=u.id
         WHERE u.status='ACTIVE' GROUP BY u.id ORDER BY completed_tasks DESC,overdue_tasks ASC LIMIT 8`),
-      this.db.query(`SELECT al.id,al.action,al.created_at,u.first_name,u.last_name FROM audit_logs al LEFT JOIN users u ON u.id=al.actor_user_id ORDER BY al.created_at DESC LIMIT 8`),
-      this.db.query(`SELECT a.id,a.title,a.activity_type,a.scheduled_at,o.name organization_name,u.first_name assignee_first_name,u.last_name assignee_last_name
+      this.db.query(`SELECT al.id,al.action,al.module,al.entity_type,al.entity_id,al.created_at,u.first_name,u.last_name FROM audit_logs al LEFT JOIN users u ON u.id=al.actor_user_id ORDER BY al.created_at DESC LIMIT 8`),
+      this.db.query(`SELECT a.id,a.title,a.activity_type,a.scheduled_at,a.lead_id,a.organization_id,o.name organization_name,u.first_name assignee_first_name,u.last_name assignee_last_name
         FROM activities a LEFT JOIN organizations o ON o.id=a.organization_id LEFT JOIN users u ON u.id=a.assigned_to_id
         WHERE a.status='PLANNED' AND a.scheduled_at>=NOW() ORDER BY a.scheduled_at LIMIT 8`)
     ]);
@@ -44,30 +45,75 @@ export class DeliveryService {
   }
 
   async approveProspect(id:string,ctx?:Ctx){
-    const current=await this.db.query(`SELECT * FROM leads WHERE id=$1 AND record_type='LEAD' LIMIT 1`,[id]);
-    if(!current.rows[0])throw new NotFoundException('Lead not found');
-    if(current.rows[0].stage!=='READY_FOR_PROSPECT_REVIEW')throw new BadRequestException('Lead must be ready for Prospect review first');
-    const r=await this.db.query(`UPDATE leads SET record_type='PROSPECT',stage='QUALIFIED',converted_to_prospect_at=NOW(),updated_at=NOW() WHERE id=$1 RETURNING *`,[id]);
-    await this.audit.log({actorUserId:ctx?.actorUserId,action:'LEAD_CONVERTED_TO_PROSPECT',module:'leads',entityType:'lead',entityId:id,oldValues:current.rows[0],newValues:r.rows[0],ipAddress:ctx?.ipAddress,userAgent:ctx?.userAgent});
+    const current=await this.lifecycleRecord(id,'LEAD');
+    if(!current)throw new NotFoundException('Lead not found');
+    if(current.stage!=='READY_FOR_PROSPECT_REVIEW')throw new BadRequestException('Lead must be ready for Prospect review first');
+    if(!Number(current.expected_revenue)||Number(current.expected_revenue)<=0)throw new BadRequestException('Expected revenue is required before Prospect approval');
+    const r=await this.db.query(`UPDATE leads SET record_type='PROSPECT',stage='QUALIFIED',available_in_pool=false,converted_to_prospect_at=NOW(),updated_at=NOW() WHERE id=$1 RETURNING *`,[id]);
+    await this.audit.log({actorUserId:ctx?.actorUserId,action:'LEAD_CONVERTED_TO_PROSPECT',module:'leads',entityType:'lead',entityId:id,oldValues:current,newValues:r.rows[0],ipAddress:ctx?.ipAddress,userAgent:ctx?.userAgent});
+    const adminIds=await this.adminIds();
+    const participants=await this.participantIds(current);
+    const conversionMessage=`${current.organization_name} is now a Prospect. Expected revenue: ${this.money(Number(current.expected_revenue))}.`;
+    await this.notifyUsers(adminIds,{title:'Lead converted to Prospect',body:conversionMessage,kind:'PROSPECT_CONVERSION',href:'/prospects',subject:`Prospect created: ${current.organization_name}`});
+    await this.notifyUsers(participants,{title:'Your Lead is now a Prospect',body:conversionMessage,kind:'PROSPECT_CONVERSION',href:'/home',subject:`Prospect approved: ${current.organization_name}`});
     return r.rows[0];
   }
 
   async rejectProspect(id:string,reason:string|undefined,ctx?:Ctx){
-    const current=await this.db.query(`SELECT * FROM leads WHERE id=$1 AND record_type='LEAD' LIMIT 1`,[id]);
-    if(!current.rows[0])throw new NotFoundException('Lead not found');
+    const current=await this.lifecycleRecord(id,'LEAD');
+    if(!current)throw new NotFoundException('Lead not found');
     const note=reason?.trim();
     const r=await this.db.query(`UPDATE leads SET stage='ENGAGED',notes=CASE WHEN $2::text IS NULL THEN notes ELSE CONCAT_WS(E'\n',notes,'Prospect review: '||$2) END,updated_at=NOW() WHERE id=$1 RETURNING *`,[id,note||null]);
-    await this.audit.log({actorUserId:ctx?.actorUserId,action:'PROSPECT_REVIEW_REJECTED',module:'leads',entityType:'lead',entityId:id,oldValues:current.rows[0],newValues:r.rows[0],ipAddress:ctx?.ipAddress,userAgent:ctx?.userAgent});
+    await this.audit.log({actorUserId:ctx?.actorUserId,action:'PROSPECT_REVIEW_REJECTED',module:'leads',entityType:'lead',entityId:id,oldValues:current,newValues:r.rows[0],ipAddress:ctx?.ipAddress,userAgent:ctx?.userAgent});
+    const participants=await this.participantIds(current);
+    if(participants.length) await this.notifyUsers(participants,{title:'Prospect review returned',body:`${current.organization_name} was returned for more Lead work${note?`: ${note}`:'.'}`,kind:'PROSPECT_REVIEW',href:`/my-work/leads/${id}`,subject:`More work requested: ${current.organization_name}`});
     return r.rows[0];
   }
 
   async convertClient(id:string,ctx?:Ctx){
-    const current=await this.db.query(`SELECT * FROM leads WHERE id=$1 AND record_type='PROSPECT' LIMIT 1`,[id]);
-    if(!current.rows[0])throw new NotFoundException('Prospect not found');
+    const current=await this.lifecycleRecord(id,'PROSPECT');
+    if(!current)throw new NotFoundException('Prospect not found');
     const r=await this.db.query(`UPDATE leads SET record_type='CLIENT',converted_to_client_at=NOW(),updated_at=NOW() WHERE id=$1 RETURNING *`,[id]);
-    await this.audit.log({actorUserId:ctx?.actorUserId,action:'PROSPECT_CONVERTED_TO_CLIENT',module:'leads',entityType:'lead',entityId:id,oldValues:current.rows[0],newValues:r.rows[0],ipAddress:ctx?.ipAddress,userAgent:ctx?.userAgent});
+    await this.audit.log({actorUserId:ctx?.actorUserId,action:'PROSPECT_CONVERTED_TO_CLIENT',module:'leads',entityType:'lead',entityId:id,oldValues:current,newValues:r.rows[0],ipAddress:ctx?.ipAddress,userAgent:ctx?.userAgent});
+    const clientMessage=`${current.organization_name} is now a Client. Realized revenue will be recorded after payment is confirmed.`;
+    await this.notifyUsers(await this.adminIds(),{title:'Prospect converted to Client',body:clientMessage,kind:'CLIENT_CONVERSION',href:'/clients',subject:`New Client: ${current.organization_name}`});
+    await this.notifyUsers(await this.participantIds(current),{title:'Your Prospect is now a Client',body:clientMessage,kind:'CLIENT_CONVERSION',href:'/home',subject:`Client conversion: ${current.organization_name}`});
     return r.rows[0];
   }
+
+  async recordClientRevenue(id:string,amountInput:number,ctx?:Ctx){
+    const amount=Number(amountInput);
+    if(!Number.isFinite(amount)||amount<=0)throw new BadRequestException('Enter a realized revenue amount greater than zero');
+    const current=await this.lifecycleRecord(id,'CLIENT');
+    if(!current)throw new NotFoundException('Client not found');
+    const updated=(await this.db.query(`UPDATE leads SET actual_revenue=$2,client_revenue_recorded_at=NOW(),client_revenue_recorded_by_id=$3,updated_at=NOW() WHERE id=$1 AND record_type='CLIENT' RETURNING *`,[id,amount,ctx?.actorUserId??null])).rows[0];
+    await this.audit.log({actorUserId:ctx?.actorUserId,action:'CLIENT_REVENUE_RECORDED',module:'clients',entityType:'lead',entityId:id,oldValues:{actualRevenue:current.actual_revenue},newValues:{actualRevenue:amount},ipAddress:ctx?.ipAddress,userAgent:ctx?.userAgent});
+    const ownerName=[current.owner_first_name,current.owner_last_name].filter(Boolean).join(' ')||current.assigned_team_name||'The PlanoraHub team';
+    const body=`${ownerName} brought ${current.organization_name} on board, with ${this.money(amount)} in realized revenue recorded.`;
+    await this.notifyUsers(await this.activeUserIds(),{title:'New client revenue recorded',body,kind:'CLIENT_REVENUE',href:'/clients',subject:`${current.organization_name}: ${this.money(amount)} revenue recorded`});
+    return updated;
+  }
+
+  private async lifecycleRecord(id:string,type:'LEAD'|'PROSPECT'|'CLIENT'){
+    return (await this.db.query(`SELECT l.*,o.name organization_name,u.first_name owner_first_name,u.last_name owner_last_name,t.name assigned_team_name FROM leads l JOIN organizations o ON o.id=l.organization_id LEFT JOIN users u ON u.id=l.assigned_to_id LEFT JOIN teams t ON t.id=l.assigned_team_id WHERE l.id=$1 AND l.record_type=$2::lead_record_type LIMIT 1`,[id,type])).rows[0]??null;
+  }
+
+  private async adminIds(){return (await this.db.query(`SELECT u.id FROM users u JOIN roles r ON r.id=u.role_id WHERE r.code='SUPER_ADMIN' AND u.status='ACTIVE'`)).rows.map((row:any)=>String(row.id));}
+  private async activeUserIds(){return (await this.db.query(`SELECT id FROM users WHERE status='ACTIVE'`)).rows.map((row:any)=>String(row.id));}
+  private async teamMemberIds(teamId:string){return (await this.db.query(`SELECT user_id id FROM team_members WHERE team_id=$1`,[teamId])).rows.map((row:any)=>String(row.id));}
+  private async participantIds(record:any){const ids:string[]=[];if(record?.assigned_to_id)ids.push(String(record.assigned_to_id));if(record?.assigned_team_id)ids.push(...await this.teamMemberIds(String(record.assigned_team_id)));return[...new Set(ids)];}
+  private async notifyUsers(ids:string[],payload:{title:string;body:string;kind:string;href:string;subject:string}){
+    const unique=[...new Set(ids.filter(Boolean))];
+    if(!unique.length)return;
+    const recipients=(await this.db.query(`SELECT id,first_name,email FROM users WHERE id=ANY($1::uuid[]) AND status<>'DISABLED'`,[unique])).rows;
+    for(const recipient of recipients){
+      await this.db.query(`INSERT INTO notifications(user_id,title,body,kind,href) VALUES($1,$2,$3,$4,$5)`,[recipient.id,payload.title,payload.body,payload.kind,payload.href]);
+      if(recipient.email){
+        await this.mail.sendOperational({to:recipient.email,firstName:recipient.first_name,subject:payload.subject,title:payload.title,message:payload.body,ctaPath:payload.href,ctaLabel:'Open in PlanoraHub CRM',idempotencyKey:`${payload.kind}/${recipient.id}/${Date.now()}`});
+      }
+    }
+  }
+  private money(value:number){return new Intl.NumberFormat('en-NG',{style:'currency',currency:'NGN',maximumFractionDigits:0}).format(value);}
 
   async calendar(userId?:string,staff=false){
     const [activities,tasks]=await Promise.all([
@@ -94,6 +140,34 @@ export class DeliveryService {
     ]);
     return {summary:summary.rows[0],tasks:tasks.rows,leads:leads.rows,followups:followups.rows};
   }
+
+  async latestActivities(){
+    const r=await this.db.query(`SELECT al.id,al.action,al.module,al.entity_type,al.entity_id,al.created_at,
+      u.id actor_user_id,u.first_name actor_first_name,u.last_name actor_last_name,u.email actor_email,
+      r.name actor_role_name,d.name actor_department_name,
+      CASE WHEN al.entity_type='task' THEN t.title
+           WHEN al.entity_type='lead' THEN o.name
+           ELSE NULL END entity_title,
+      CASE WHEN al.entity_type='lead' THEN l.record_type::text ELSE NULL END record_type,
+      CASE WHEN al.entity_type='lead' THEN l.stage::text ELSE NULL END lead_stage,
+      CASE WHEN al.entity_type='task' THEN '/tasks/'||t.id::text
+           WHEN al.entity_type='lead' AND l.record_type='LEAD' THEN '/leads/'||l.id::text
+           WHEN al.entity_type='lead' AND l.record_type='PROSPECT' THEN '/prospects'
+           WHEN al.entity_type='lead' AND l.record_type='CLIENT' THEN '/clients'
+           ELSE NULL END href
+      FROM audit_logs al
+      LEFT JOIN users u ON u.id=al.actor_user_id
+      LEFT JOIN roles r ON r.id=u.role_id
+      LEFT JOIN departments d ON d.id=u.department_id
+      LEFT JOIN tasks t ON al.entity_type='task' AND t.id=al.entity_id
+      LEFT JOIN leads l ON al.entity_type='lead' AND l.id=al.entity_id
+      LEFT JOIN organizations o ON o.id=l.organization_id
+      WHERE al.module IN('leads','tasks','clients')
+         OR al.action IN('LEAD_CONVERTED_TO_PROSPECT','PROSPECT_REVIEW_REJECTED','PROSPECT_CONVERTED_TO_CLIENT','CLIENT_REVENUE_RECORDED')
+      ORDER BY al.created_at DESC LIMIT 500`);
+    return r.rows;
+  }
+
   async auditFeed(){
     const r=await this.db.query(`SELECT al.id,al.action,al.module,al.entity_type,al.entity_id,al.created_at,al.ip_address,al.user_agent,
       u.id actor_user_id,u.first_name actor_first_name,u.last_name actor_last_name,u.email actor_email,

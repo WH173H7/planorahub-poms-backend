@@ -2,7 +2,7 @@ export type ParsedImportRow = Record<string, string> & { __rowNumber: string };
 
 const expectedHeaders = [
   'organization_name', 'industry', 'website', 'general_email', 'phone',
-  'location', 'source', 'priority', 'proposed_revenue', 'revenue_probability', 'notes',
+  'location', 'source', 'priority', 'notes',
 ];
 
 export async function parseLeadImportFile(file: File): Promise<ParsedImportRow[]> {
@@ -13,11 +13,10 @@ export async function parseLeadImportFile(file: File): Promise<ParsedImportRow[]
 }
 
 export function downloadLeadImportTemplate() {
-  // Keep the column order stable: Admin can fill this file directly and upload it
-  // without doing manual mapping. Blank proposed_revenue becomes NGN 1,000,000.
+  // Keep the column order stable so Admin can fill this file directly and upload it.
   const rows = [
     expectedHeaders,
-    ['Acme Limited','Technology','https://acme.example','hello@acme.example','+2348000000000','Lagos, Nigeria','Research','MEDIUM','2500000','40','Potential enterprise account'],
+    ['Acme Limited','Technology','https://acme.example','hello@acme.example','+2348000000000','Lagos, Nigeria','Research','MEDIUM','Potential enterprise account'],
   ];
   const csv = '\uFEFF' + rows.map((row) => row.map(csvCell).join(',')).join('\r\n');
   const blob = new Blob([csv], { type:'text/csv;charset=utf-8' });
@@ -38,7 +37,7 @@ export function normalizeHeader(value: string) {
     organization:'organization_name', company:'organization_name', company_name:'organization_name', name:'organization_name',
     email:'general_email', organisation_name:'organization_name', organisation:'organization_name',
     website_url:'website', url:'website', telephone:'phone', mobile:'phone',
-    address:'location', city:'location', lead_source:'source', remarks:'notes', note:'notes', revenue:'proposed_revenue', estimated_revenue:'proposed_revenue', proposed_value:'proposed_revenue', estimated_value:'proposed_revenue', probability:'revenue_probability', win_probability:'revenue_probability',
+    address:'location', city:'location', lead_source:'source', remarks:'notes', note:'notes',
   };
   return aliases[compact] ?? compact;
 }

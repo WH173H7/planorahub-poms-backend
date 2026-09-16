@@ -4,6 +4,7 @@ import { AuditService } from '../audit/audit.service.js';
 import { SupabaseService } from '../supabase/supabase.service.js';
 import { CreateStaffDto } from './dto/create-staff.dto.js';
 import { type StaffStatus, UsersRepository } from './users.repository.js';
+import { StaffMailService } from '../mailer/staff-mail.service.js';
 
 type Ctx={actorUserId?:string;ipAddress?:string;userAgent?:string};
 type Override={permissionId:string;effect:'ALLOW'|'DENY';reason?:string};
@@ -14,7 +15,7 @@ export type UpdateStaffInput={
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly usersRepository:UsersRepository,private readonly supabase:SupabaseService,private readonly audit:AuditService){}
+  constructor(private readonly usersRepository:UsersRepository,private readonly supabase:SupabaseService,private readonly audit:AuditService,private readonly mail:StaffMailService){}
 
   listStaff(){ return this.usersRepository.listStaff(); }
 
@@ -27,7 +28,10 @@ export class UsersService {
   async createStaff(dto:CreateStaffDto,ctx?:Ctx){
     const email=dto.email.trim().toLowerCase();
     if(await this.usersRepository.findByEmail(email)) throw new ConflictException('A staff account with this email already exists');
-    if(!(await this.usersRepository.getRole(dto.roleId))) throw new BadRequestException('Invalid role');
+    const selectedRole=await this.usersRepository.getRole(dto.roleId);
+    if(!selectedRole) throw new BadRequestException('Invalid role');
+    if(selectedRole.code==='SUPER_ADMIN') throw new BadRequestException('Super Admin cannot be assigned through the staff creation flow');
+    if(selectedRole.is_active===false) throw new BadRequestException('This role is archived and cannot be assigned to new staff');
     const departmentId=dto.departmentId??null;
     if(!departmentId) throw new BadRequestException('Create/select a department before creating staff');
     if(!(await this.usersRepository.departmentExists(departmentId))) throw new BadRequestException('Invalid department');
@@ -53,7 +57,17 @@ export class UsersService {
       await this.audit.log({actorUserId:ctx?.actorUserId,action:'STAFF_CREATED',module:'users',entityType:'user',entityId:staff.id,
         newValues:{firstName:staff.first_name,lastName:staff.last_name,email:staff.email,roleId:staff.role_id,departmentId:staff.department_id,teamIds,permissionOverrides},
         ipAddress:ctx?.ipAddress,userAgent:ctx?.userAgent});
-      return {staff,temporaryPassword};
+      const profile:any=await this.getStaff(staff.id);
+      const emailDelivery=await this.mail.sendWelcome({
+        firstName:profile.first_name,
+        lastName:profile.last_name,
+        email:profile.email,
+        temporaryPassword,
+        roleName:profile.role_name,
+        departmentName:profile.department_name,
+        teamNames:(profile.teams??[]).map((team:any)=>team.name),
+      });
+      return {staff:profile,temporaryPassword,emailDelivery};
     }catch{
       await this.supabase.admin.auth.admin.deleteUser(data.user.id);
       if(staff?.id) await this.usersRepository.deleteInternalUser(staff.id).catch(()=>undefined);
@@ -66,6 +80,8 @@ export class UsersService {
     const roleId=input.roleId??current.role_id;
     const role=await this.usersRepository.getRole(roleId);
     if(!role) throw new BadRequestException('Invalid role');
+    if(input.roleId && role.id!==current.role_id && role.is_active===false) throw new BadRequestException('This role is archived and cannot be newly assigned');
+    if(input.roleId && role.code==='SUPER_ADMIN' && current.role_id!==role.id) throw new BadRequestException('Super Admin cannot be assigned through the staff editor');
     const departmentId=input.departmentId===undefined?current.department_id:input.departmentId;
     if(departmentId && !(await this.usersRepository.departmentExists(departmentId))) throw new BadRequestException('Invalid department');
     if(!(await this.usersRepository.roleAllowedInDepartment(roleId,departmentId))) throw new BadRequestException('This role is not available in the selected department');
@@ -117,15 +133,27 @@ export class UsersService {
     return this.getStaff(id);
   }
 
-  async resetPassword(id:string,ctx?:Ctx){
+  async resetPassword(id:string,sendEmail:boolean,ctx?:Ctx){
     const staff=await this.requireStaff(id);
     if(!staff.auth_user_id) throw new BadRequestException('This staff account has no authentication account');
     const temporaryPassword=this.generateTemporaryPassword();
     const {error}=await this.supabase.admin.auth.admin.updateUserById(staff.auth_user_id,{password:temporaryPassword,user_metadata:{must_change_password:true}});
     if(error) throw new BadRequestException(error.message);
     await this.usersRepository.markPasswordResetRequired(id);
-    await this.audit.log({actorUserId:ctx?.actorUserId,action:'STAFF_PASSWORD_RESET',module:'users',entityType:'user',entityId:id,newValues:{mustChangePassword:true},ipAddress:ctx?.ipAddress,userAgent:ctx?.userAgent});
-    return {temporaryPassword};
+    const profile:any=await this.getStaff(id);
+    const emailDelivery=sendEmail
+      ? await this.mail.sendPasswordReset({
+          firstName:profile.first_name,
+          lastName:profile.last_name,
+          email:profile.email,
+          temporaryPassword,
+          roleName:profile.role_name,
+          departmentName:profile.department_name,
+          teamNames:(profile.teams??[]).map((team:any)=>team.name),
+        })
+      : {status:'SKIPPED' as const,message:'Admin chose not to email this temporary password.'};
+    await this.audit.log({actorUserId:ctx?.actorUserId,action:'STAFF_PASSWORD_RESET',module:'users',entityType:'user',entityId:id,newValues:{mustChangePassword:true,emailRequested:sendEmail,emailStatus:emailDelivery.status},ipAddress:ctx?.ipAddress,userAgent:ctx?.userAgent});
+    return {temporaryPassword,emailDelivery};
   }
 
   private async requireStaff(id:string){const s=await this.usersRepository.findById(id);if(!s) throw new NotFoundException('Staff member not found');return s;}

@@ -1,150 +1,45 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import Image from 'next/image';
+import {useEffect,useMemo,useState} from 'react';
+import {NavSection} from '@/components/navigation/nav-section';
+import type {NavigationSection} from '@/components/navigation/navigation.types';
+import {Icon} from '@/components/ui/icon';
+import {getPendingLetterApprovalCount,listChatChannels} from '@/lib/workspace/api';
+import {directContacts} from '@/lib/workspace/ops-api';
 
-import { NavSection } from '@/components/navigation/nav-section';
-import type { NavigationSection } from '@/components/navigation/navigation.types';
-import { Icon } from '@/components/ui/icon';
+type AppSidebarProps={navigation:NavigationSection[];path:string;collapsed:boolean;onNavigate?:()=>void;onToggleCollapsed?:()=>void;mobile?:boolean};
 
-type AppSidebarProps = {
-  navigation: NavigationSection[];
-  path: string;
-  collapsed: boolean;
-  onNavigate?: () => void;
-  mobile?: boolean;
-};
+export function AppSidebar({navigation,path,collapsed,onNavigate,onToggleCollapsed,mobile=false}:AppSidebarProps){
+  const compact=collapsed&&!mobile;
+  const[pendingLetters,setPendingLetters]=useState(0),[unreadMessenger,setUnreadMessenger]=useState(0);
 
-export function AppSidebar({
-  navigation,
-  path,
-  collapsed,
-  onNavigate,
-  mobile = false,
-}: AppSidebarProps) {
-  const navigationRef = useRef<HTMLElement>(null);
+  useEffect(()=>{
+    if(!navigation.some(section=>section.items.some(item=>item.href==='/reports')))return;
+    let alive=true;
+    const load=async()=>{try{const count=await getPendingLetterApprovalCount();if(alive)setPendingLetters(count)}catch{if(alive)setPendingLetters(0)}};
+    void load();const timer=setInterval(()=>void load(),15000);return()=>{alive=false;clearInterval(timer)};
+  },[navigation]);
 
-  useEffect(() => {
-    const element = navigationRef.current;
+  useEffect(()=>{
+    if(!navigation.some(section=>section.items.some(item=>item.href==='/internal-chat')))return;
+    let alive=true;
+    const load=async()=>{try{const[channels,people]=await Promise.all([listChatChannels(),directContacts()]);const count=channels.reduce((sum,item)=>sum+Number(item.unread_count||0),0)+people.reduce((sum,item)=>sum+Number(item.unread_count||0),0);if(alive)setUnreadMessenger(count)}catch{if(alive)setUnreadMessenger(0)}};
+    void load();const timer=setInterval(()=>void load(),10000);return()=>{alive=false;clearInterval(timer)};
+  },[navigation]);
 
-    if (!element || mobile) return;
+  const decorated=useMemo(()=>navigation.map(section=>({...section,items:section.items.map(item=>{
+    if(item.href==='/letterhead'&&pendingLetters)return{...item,badge:pendingLetters};
+    if(item.href==='/internal-chat'&&unreadMessenger)return{...item,badge:unreadMessenger>99?'99+':unreadMessenger};
+    return item;
+  })})),[navigation,pendingLetters,unreadMessenger]);
 
-    const reducedMotion = window.matchMedia(
-      '(prefers-reduced-motion: reduce)',
-    ).matches;
-
-    if (reducedMotion) return;
-
-    let frame = 0;
-    let previous = performance.now();
-    let direction: 1 | -1 = 1;
-    let pointerInside = false;
-    let pausedUntil = 0;
-
-    const pauseTemporarily = (milliseconds = 2500) => {
-      pausedUntil = performance.now() + milliseconds;
-    };
-
-    const onPointerEnter = () => {
-      pointerInside = true;
-      previous = performance.now();
-    };
-
-    const onPointerLeave = () => {
-      pointerInside = false;
-    };
-
-    const onWheel = () => {
-      pauseTemporarily();
-    };
-
-    const onTouchStart = () => {
-      pauseTemporarily();
-    };
-
-    const onFocusIn = () => {
-      pauseTemporarily(3500);
-    };
-
-    const drift = (now: number) => {
-      const overflowing = element.scrollHeight > element.clientHeight + 2;
-
-      if (
-        pointerInside &&
-        overflowing &&
-        now >= pausedUntil
-      ) {
-        const delta = Math.min(now - previous, 50);
-
-        // Very slow CRM-style drift: approximately 7px per second.
-        element.scrollTop += direction * (delta / 1000) * 7;
-
-        const maxScroll = element.scrollHeight - element.clientHeight;
-
-        if (element.scrollTop >= maxScroll - 1) {
-          element.scrollTop = maxScroll;
-          direction = -1;
-          pauseTemporarily(900);
-        } else if (element.scrollTop <= 1) {
-          element.scrollTop = 0;
-          direction = 1;
-          pauseTemporarily(900);
-        }
-      }
-
-      previous = now;
-      frame = requestAnimationFrame(drift);
-    };
-
-    element.addEventListener('pointerenter', onPointerEnter);
-    element.addEventListener('pointerleave', onPointerLeave);
-    element.addEventListener('wheel', onWheel, { passive: true });
-    element.addEventListener('touchstart', onTouchStart, { passive: true });
-    element.addEventListener('focusin', onFocusIn);
-
-    frame = requestAnimationFrame(drift);
-
-    return () => {
-      cancelAnimationFrame(frame);
-
-      element.removeEventListener('pointerenter', onPointerEnter);
-      element.removeEventListener('pointerleave', onPointerLeave);
-      element.removeEventListener('wheel', onWheel);
-      element.removeEventListener('touchstart', onTouchStart);
-      element.removeEventListener('focusin', onFocusIn);
-    };
-  }, [mobile]);
-
-  return (
-    <aside className="sidebar" aria-label="Application navigation">
-      <div className="sidebar-brand">
-        <span className="brand-mark">P</span>
-
-        <span className="brand-copy">
-          Planora<span>Hub</span>
-        </span>
-
-        {mobile ? (
-          <button
-            className="mobile-close"
-            aria-label="Close navigation"
-            onClick={onNavigate}
-          >
-            <Icon name="close" />
-          </button>
-        ) : null}
-      </div>
-
-      <nav ref={navigationRef} className="sidebar-nav">
-        {navigation.map((section) => (
-          <NavSection
-            key={section.label}
-            section={section}
-            path={path}
-            collapsed={collapsed}
-            onNavigate={onNavigate}
-          />
-        ))}
-      </nav>
-    </aside>
-  );
+  return <aside className="sidebar" aria-label="Application navigation">
+    <div className="sidebar-brand">
+      {compact?<span className="brand-mark" aria-label="PlanoraHub">P</span>:<div className="sidebar-brand-logo" aria-label="PlanoraHub CRM"><Image src="/planorahub.png" alt="PlanoraHub CRM" width={104} height={59} priority/></div>}
+      {mobile?<button className="mobile-close" type="button" aria-label="Close navigation" onClick={onNavigate}><Icon name="close"/></button>:null}
+    </div>
+    <nav className="sidebar-nav">{decorated.map(section=><NavSection key={section.label} section={section} path={path} collapsed={collapsed} onNavigate={onNavigate}/>)}</nav>
+    {!mobile&&onToggleCollapsed?<div className="sidebar-footer"><button className="collapse-button" type="button" onClick={onToggleCollapsed} aria-label={collapsed?'Expand sidebar':'Collapse sidebar'} title={collapsed?'Expand sidebar':'Collapse sidebar'}><Icon name="chevron"/><span className="collapse-label">{collapsed?'':'Collapse'}</span></button></div>:null}
+  </aside>;
 }

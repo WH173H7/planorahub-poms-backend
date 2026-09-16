@@ -5,6 +5,10 @@ export async function listLeads(): Promise<Lead[]> {
   return (await apiFetch<ApiResponse<Lead[]>>('/admin/leads')).data;
 }
 
+
+export async function publishLeadsToPool(leadIds:string[]):Promise<{count:number;leadIds:string[]}>{return(await apiFetch<ApiResponse<{count:number;leadIds:string[]}>>('/admin/leads/pool/publish',{method:'POST',body:JSON.stringify({leadIds})})).data;}
+export async function removeLeadFromPool(id:string):Promise<Lead>{return(await apiFetch<ApiResponse<Lead>>(`/admin/leads/${id}/pool/remove`,{method:'POST'})).data;}
+
 export async function createOrganizationLead(input: CreateOrganizationLeadInput): Promise<Lead> {
   return (await apiFetch<ApiResponse<Lead>>('/admin/leads/organization', {
     method: 'POST',
@@ -88,7 +92,7 @@ export async function createAdminRequiredPursuitStep(
 export async function listLeadActivities(leadId:string):Promise<Activity[]>{return(await apiFetch<ApiResponse<Activity[]>>(`/admin/leads/${leadId}/activities`)).data;}
 export async function listAssignmentHistory(leadId:string):Promise<AssignmentHistory[]>{return(await apiFetch<ApiResponse<AssignmentHistory[]>>(`/admin/leads/${leadId}/assignments`)).data;}
 export async function reassignLead(leadId:string,input:{assignedToId:string;reason:string}):Promise<Lead>{return(await apiFetch<ApiResponse<Lead>>(`/admin/leads/${leadId}/reassign`,{method:'POST',body:JSON.stringify(input)})).data;}
-export async function changeLeadStage(leadId:string,input:{stage:LeadStage;reason?:string|null},staff=false):Promise<Lead>{return(await apiFetch<ApiResponse<Lead>>(`${staff?'/staff':'/admin'}/leads/${leadId}/stage`,{method:'POST',body:JSON.stringify(input)})).data;}
+export async function changeLeadStage(leadId:string,input:{stage:LeadStage;reason?:string|null;expectedRevenue?:number|null},staff=false):Promise<Lead>{return(await apiFetch<ApiResponse<Lead>>(`${staff?'/staff':'/admin'}/leads/${leadId}/stage`,{method:'POST',body:JSON.stringify(input)})).data;}
 export async function createLeadActivity(leadId:string,input:CreateActivityInput,staff=false):Promise<Activity>{return(await apiFetch<ApiResponse<Activity>>(`${staff?'/staff':'/admin'}/leads/${leadId}/activities`,{method:'POST',body:JSON.stringify(input)})).data;}
 
 export async function getMyWork():Promise<MyWork>{return(await apiFetch<ApiResponse<MyWork>>('/staff/my-work')).data;}
@@ -163,6 +167,7 @@ export async function getTask(id:string,staff:boolean):Promise<TaskDetail>{retur
 export async function createTask(input:Record<string,unknown>):Promise<TaskDetail>{return(await apiFetch<ApiResponse<TaskDetail>>('/admin/tasks',{method:'POST',body:JSON.stringify(input)})).data;}
 export async function updateTask(id:string,input:Record<string,unknown>,staff:boolean):Promise<TaskDetail>{return(await apiFetch<ApiResponse<TaskDetail>>(`${staff?'/staff':'/admin'}/tasks/${id}`,{method:'PATCH',body:JSON.stringify(input)})).data;}
 export async function deleteTask(id:string):Promise<void>{await apiFetch(`/admin/tasks/${id}`,{method:'DELETE'});}
+export async function controlTask(id:string,action:'PAUSE'|'RESUME'|'CANCEL'|'COMPLETE'|'REOPEN'|'DISPATCH_NOW'):Promise<TaskDetail>{return(await apiFetch<ApiResponse<TaskDetail>>(`/admin/tasks/${id}/control`,{method:'POST',body:JSON.stringify({action})})).data;}
 export async function uploadTaskAttachment(id:string,file:File,staff=false):Promise<void>{const data=new FormData();data.set('file',file);await apiFetch(`${staff?'/staff':'/admin'}/tasks/${id}/attachments`,{method:'POST',body:data});}
 export async function listOrganizations():Promise<Array<{id:string;name:string}>>{return(await apiFetch<ApiResponse<Array<{id:string;name:string}>>>('/admin/organizations')).data;}
 export async function listContacts():Promise<Array<{id:string;organization_id:string;organization_name:string;first_name:string;last_name:string;job_title:string|null}>>{return(await apiFetch<ApiResponse<Array<{id:string;organization_id:string;organization_name:string;first_name:string;last_name:string;job_title:string|null}>>>('/admin/contacts')).data;}

@@ -35,6 +35,12 @@ export class AdminDirectoryService {
         r.name,
         r.description,
         r.is_system_role,
+        COALESCE(r.is_active, TRUE) AS is_active,
+        (
+          SELECT COUNT(*)::int
+          FROM users u
+          WHERE u.role_id = r.id
+        ) AS staff_count,
 
         COALESCE(
           (
@@ -74,6 +80,162 @@ export class AdminDirectoryService {
     );
 
     return result.rows;
+  }
+
+  async createRole(params: {
+    name?: string;
+    description?: string;
+    permissionIds?: string[];
+  }) {
+    const name = params.name?.trim();
+    if (!name) {
+      throw new BadRequestException('Role name is required');
+    }
+
+    const duplicate = await this.db.query(
+      `SELECT id FROM roles WHERE LOWER(name)=LOWER($1) LIMIT 1`,
+      [name],
+    );
+    if (duplicate.rowCount) {
+      throw new ConflictException('A role with this name already exists');
+    }
+
+    const code = await this.nextRoleCode(name);
+    const result = await this.db.query<{
+      id: string;
+      code: string;
+      name: string;
+      description: string | null;
+    }>(
+      `INSERT INTO roles(code,name,description,is_system_role,is_active)
+       VALUES($1,$2,$3,FALSE,TRUE)
+       RETURNING id,code,name,description`,
+      [code, name, params.description?.trim() || null],
+    );
+
+    const role = result.rows[0];
+    await this.syncRolePermissions(role.id, params.permissionIds ?? []);
+    return (await this.getRoleById(role.id))!;
+  }
+
+  async updateRole(
+    id: string,
+    params: {
+      name?: string;
+      description?: string;
+      permissionIds?: string[];
+      isActive?: boolean;
+    },
+  ) {
+    const existing = await this.getRoleById(id);
+    if (!existing) {
+      throw new NotFoundException('Role not found');
+    }
+
+    if (existing.code === 'SUPER_ADMIN') {
+      throw new BadRequestException('The Super Admin role is protected');
+    }
+
+    if (existing.is_system_role && existing.code !== 'MARKETING') {
+      throw new BadRequestException('This legacy system role is archived and cannot be edited');
+    }
+
+    if (existing.code === 'MARKETING' && (params.name !== undefined || params.isActive === false)) {
+      throw new BadRequestException('The built-in Marketing role cannot be renamed or archived');
+    }
+
+    const name = params.name?.trim();
+    if (name) {
+      const duplicate = await this.db.query(
+        `SELECT id FROM roles WHERE LOWER(name)=LOWER($1) AND id<>$2 LIMIT 1`,
+        [name, id],
+      );
+      if (duplicate.rowCount) {
+        throw new ConflictException('A role with this name already exists');
+      }
+    }
+
+    await this.db.query(
+      `UPDATE roles
+       SET name=COALESCE($2,name),
+           description=CASE WHEN $3::boolean THEN $4 ELSE description END,
+           is_active=COALESCE($5,is_active),
+           updated_at=NOW()
+       WHERE id=$1`,
+      [
+        id,
+        existing.code === 'MARKETING' ? null : name || null,
+        params.description !== undefined,
+        params.description === undefined ? null : params.description.trim() || null,
+        existing.code === 'MARKETING' ? null : params.isActive ?? null,
+      ],
+    );
+
+    if (params.permissionIds !== undefined) {
+      await this.syncRolePermissions(id, params.permissionIds);
+    }
+
+    return (await this.getRoleById(id))!;
+  }
+
+  private async getRoleById(id: string) {
+    const result = await this.db.query(
+      `SELECT r.id,r.code,r.name,r.description,r.is_system_role,
+              COALESCE(r.is_active,TRUE) AS is_active,
+              (SELECT COUNT(*)::int FROM users u WHERE u.role_id=r.id) AS staff_count,
+              COALESCE((
+                SELECT JSONB_AGG(JSONB_BUILD_OBJECT(
+                  'id',p.id,'code',p.code,'name',p.name,'module',p.module,'description',p.description
+                ) ORDER BY p.module,p.name)
+                FROM role_permissions rp
+                JOIN permissions p ON p.id=rp.permission_id
+                WHERE rp.role_id=r.id
+              ),'[]'::jsonb) AS permissions
+       FROM roles r WHERE r.id=$1 LIMIT 1`,
+      [id],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  private async nextRoleCode(name: string) {
+    const base = name
+      .toUpperCase()
+      .replace(/[^A-Z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 64) || 'CUSTOM_ROLE';
+
+    let code = base;
+    let suffix = 2;
+    while ((await this.db.query(`SELECT 1 FROM roles WHERE code=$1 LIMIT 1`, [code])).rowCount) {
+      code = `${base.slice(0, 58)}_${suffix++}`;
+    }
+    return code;
+  }
+
+  private async validatePermissionIds(permissionIds: string[]) {
+    const unique = [...new Set(permissionIds)];
+    if (!unique.length) return unique;
+    const result = await this.db.query<{ id: string }>(
+      `SELECT id FROM permissions WHERE id=ANY($1::uuid[])`,
+      [unique],
+    );
+    if (result.rows.length !== unique.length) {
+      throw new BadRequestException('One or more selected permissions are invalid');
+    }
+    return unique;
+  }
+
+  private async syncRolePermissions(roleId: string, permissionIds: string[]) {
+    const unique = await this.validatePermissionIds(permissionIds);
+    await this.db.query(`DELETE FROM role_permissions WHERE role_id=$1`, [roleId]);
+    if (!unique.length) return;
+    await this.db.query(
+      `INSERT INTO role_permissions(role_id,permission_id)
+       SELECT $1::uuid,selected.permission_id
+       FROM UNNEST($2::uuid[]) AS selected(permission_id)
+       ON CONFLICT DO NOTHING`,
+      [roleId, unique],
+    );
   }
 
   async getPermissions() {

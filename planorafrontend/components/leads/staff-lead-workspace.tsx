@@ -162,6 +162,18 @@ export function StaffLeadWorkspace({ leadId }: { leadId: string }) {
               <div>{ownerName(lead)}</div>
             </div>
             <div>
+              <span className="record-meta-label">Assignment source</span>
+              <div className="lead-routing-value">
+                {lead.claimed_by_id ? (
+                  <><Badge tone="purple">Lead Pool</Badge><span>Self-selected by you</span></>
+                ) : lead.assigned_team_id ? (
+                  <><Badge tone="neutral">Team</Badge><span>{lead.assigned_team_name || 'Team assignment'}</span></>
+                ) : (
+                  <><Badge tone="neutral">Assigned</Badge><span>Admin assigned</span></>
+                )}
+              </div>
+            </div>
+            <div>
               <span className="record-meta-label">Priority</span>
               <LeadPriorityPill priority={lead.priority} />
             </div>
@@ -271,8 +283,8 @@ export function StaffLeadWorkspace({ leadId }: { leadId: string }) {
           <ChangeStageDialog
             stage={lead.stage}
             onClose={() => setDialog(null)}
-            onConfirm={async (stage, reason) => {
-              await changeLeadStage(leadId, { stage, reason }, true);
+            onConfirm={async (stage, reason, expectedRevenue) => {
+              await changeLeadStage(leadId, { stage, reason, expectedRevenue }, true);
               await refresh();
               setDialog(null);
               setSuccess("Lead stage updated.");
@@ -305,8 +317,7 @@ function StaffOverview({ lead, tasks }: { lead: Lead; tasks: LeadTask[] }) {
           <div>
             <h2>Lead overview</h2>
             <p>
-              Commercial state remains separate from pursuit steps and
-              activities.
+              Keep organization research, pursuit progress, contacts and next actions together. Commercial value is introduced only when you recommend the Lead for Prospect Review.
             </p>
           </div>
         </header>
@@ -318,6 +329,10 @@ function StaffOverview({ lead, tasks }: { lead: Lead; tasks: LeadTask[] }) {
           <div>
             <dt>Stage</dt>
             <dd>{lead.stage.replaceAll("_", " ")}</dd>
+          </div>
+          <div>
+            <dt>Assignment source</dt>
+            <dd>{lead.claimed_by_id ? 'Self-selected from Lead Pool' : lead.assigned_team_id ? `Team · ${lead.assigned_team_name || 'Assigned team'}` : 'Admin assigned'}</dd>
           </div>
           <div>
             <dt>Assignment deadline</dt>

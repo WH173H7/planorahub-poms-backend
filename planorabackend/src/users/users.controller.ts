@@ -50,8 +50,17 @@ export class UsersController {
 
   @Post(':id/reset-password')
   @RequirePermission('users.reset_password')
-  async resetPassword(@Param('id') id: string, @Req() req: AuthenticatedRequest, @Headers('user-agent') ua?: string) {
-    return { success: true, message: 'Temporary password generated', data: await this.usersService.resetPassword(id, this.ctx(req, ua)) };
+  async resetPassword(
+    @Param('id') id: string,
+    @Body() body: { sendEmail?: boolean },
+    @Req() req: AuthenticatedRequest,
+    @Headers('user-agent') ua?: string,
+  ) {
+    return {
+      success: true,
+      message: 'Temporary password generated',
+      data: await this.usersService.resetPassword(id, body.sendEmail !== false, this.ctx(req, ua)),
+    };
   }
 
   private ctx(req: AuthenticatedRequest, userAgent?: string) {

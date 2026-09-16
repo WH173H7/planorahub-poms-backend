@@ -27,10 +27,10 @@ export function NavItem({
       <span className="nav-label">
         <span>{item.label}</span>
 
-        {item.disabled ? (
-          <span className="coming-soon">Soon</span>
-        ) : null}
+        {item.disabled ? <span className="coming-soon">Soon</span> : null}
+        {item.badge ? <span className="nav-count-badge">{item.badge}</span> : null}
       </span>
+      {collapsed && item.badge ? <span className="nav-compact-badge">{item.badge}</span> : null}
     </>
   );
 

@@ -1,24 +1,10 @@
-import { Controller, Get, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Req, UseGuards } from '@nestjs/common';
 
 import { AuthGuard, type AuthenticatedRequest } from './auth.guard.js';
+import { AllowPasswordChangePending } from './allow-password-change-pending.decorator.js';
 import { DatabaseService } from '../database/database.service.js';
 import { PermissionsService } from '../permissions/permissions.service.js';
 import { AuditService } from '../audit/audit.service.js';
-
-type ProfileRow = {
-  id: string;
-  first_name: string;
-  last_name: string;
-  email: string;
-  job_title: string | null;
-  status: string;
-  must_change_password: boolean;
-  role_id: string;
-  role_code: string;
-  role_name: string;
-  department_id: string | null;
-  department_name: string | null;
-};
 
 @Controller('auth')
 export class AuthController {
@@ -30,36 +16,34 @@ export class AuthController {
 
   @Get('me')
   @UseGuards(AuthGuard)
+  @AllowPasswordChangePending()
   async me(@Req() request: AuthenticatedRequest) {
     const userId = request.user!.id;
-
-    // A staff account is intentionally created as INVITED. The first successful
-    // authenticated CRM request promotes it to ACTIVE. Suspended/disabled users
-    // never reach this point because AuthGuard blocks them first.
-    const previousLogin = (await this.db.query<{last_login_at:string|null}>(
-      `SELECT last_login_at FROM users WHERE id=$1 LIMIT 1`, [userId],
+    const previousLogin = (await this.db.query<{ last_login_at: string | null }>(
+      `SELECT last_login_at FROM users WHERE id=$1 LIMIT 1`,
+      [userId],
     )).rows[0]?.last_login_at ?? null;
 
     await this.db.query(
-      `UPDATE users
-       SET status = CASE WHEN status='INVITED' THEN 'ACTIVE' ELSE status END,
-           last_login_at = NOW(),
-           updated_at = NOW()
-       WHERE id=$1`,
+      `UPDATE users SET last_login_at=NOW(),updated_at=NOW() WHERE id=$1`,
       [userId],
     );
 
     const shouldLogSession = !previousLogin || (Date.now() - new Date(previousLogin).getTime()) > 30 * 60 * 1000;
     if (shouldLogSession) {
       await this.audit.log({
-        actorUserId: userId, action: 'CRM_SESSION_OPENED', module: 'auth',
-        entityType: 'user_session', entityId: userId,
+        actorUserId: userId,
+        action: 'CRM_SESSION_OPENED',
+        module: 'auth',
+        entityType: 'user_session',
+        entityId: userId,
         newValues: { previousLoginAt: previousLogin },
-        ipAddress: request.ip, userAgent: request.headers['user-agent'],
+        ipAddress: request.ip,
+        userAgent: request.headers['user-agent'],
       });
     }
 
-    const result = await this.db.query<ProfileRow>(
+    const result = await this.db.query(
       `
         SELECT
           u.id,
@@ -86,12 +70,36 @@ export class AuthController {
     const profile = result.rows[0];
     const permissions = await this.permissions.getEffectivePermissions(userId);
 
-    return {
-      success: true,
-      data: {
-        ...profile,
-        permissions,
-      },
-    };
+    return { success: true, data: { ...profile, permissions } };
+  }
+
+  @Post('password-changed')
+  @UseGuards(AuthGuard)
+  @AllowPasswordChangePending()
+  async passwordChanged(@Req() request: AuthenticatedRequest) {
+    const userId = request.user!.id;
+
+    await this.db.query(
+      `UPDATE users
+       SET must_change_password=FALSE,
+           password_changed_at=NOW(),
+           status=CASE WHEN status='INVITED' THEN 'ACTIVE' ELSE status END,
+           updated_at=NOW()
+       WHERE id=$1`,
+      [userId],
+    );
+
+    await this.audit.log({
+      actorUserId: userId,
+      action: 'PASSWORD_CHANGED',
+      module: 'auth',
+      entityType: 'user',
+      entityId: userId,
+      newValues: { mustChangePassword: false },
+      ipAddress: request.ip,
+      userAgent: request.headers['user-agent'],
+    });
+
+    return { success: true, message: 'Password updated. Your PlanoraHub workspace is ready.' };
   }
 }

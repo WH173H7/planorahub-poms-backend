@@ -146,10 +146,11 @@ export function ReassignLeadDialog({
       setSaving(false);
     }
   }
+  const assigning = !currentOwnerId;
   return (
     <DialogFrame
-      title="Reassign Lead"
-      description={`Current owner: ${currentOwner}`}
+      title={assigning ? "Assign Lead" : "Reassign Lead"}
+      description={assigning ? "Choose the staff member who should own and work this Lead." : `Current owner: ${currentOwner}`}
       saving={saving}
       onClose={onClose}
     >
@@ -159,7 +160,7 @@ export function ReassignLeadDialog({
           <NativeSelect
             id="reassign-owner"
             name="assignedToId"
-            label="New owner"
+            label={assigning ? "Lead owner" : "New owner"}
             required
             defaultValue=""
           >
@@ -176,13 +177,14 @@ export function ReassignLeadDialog({
           <Textarea
             id="reassign-reason"
             name="reason"
-            label="Reason"
+            label={assigning ? "Assignment note" : "Reason"}
             required
             rows={4}
           />
           <Alert tone="info">
-            Existing pursuit progress, evidence and Lead history will be
-            preserved.
+            {assigning
+              ? "The default Lead pursuit workflow will be created automatically for the selected staff member."
+              : "Existing pursuit progress, evidence and Lead history will be preserved."}
           </Alert>
         </div>
         <footer>
@@ -195,7 +197,7 @@ export function ReassignLeadDialog({
             Cancel
           </Button>
           <Button type="submit" loading={saving}>
-            Confirm Reassignment
+            {assigning ? "Assign Lead" : "Confirm Reassignment"}
           </Button>
         </footer>
       </form>
@@ -210,32 +212,46 @@ export function ChangeStageDialog({
 }: {
   stage: LeadStage;
   onClose: () => void;
-  onConfirm: (next: LeadStage, reason: string | null) => Promise<void>;
+  onConfirm: (next: LeadStage, reason: string | null, expectedRevenue?: number | null) => Promise<void>;
 }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const allowed = transitions[stage];
+  const [nextStage, setNextStage] = useState<LeadStage>(allowed[0] ?? stage);
+  const prospectReview = nextStage === 'READY_FOR_PROSPECT_REVIEW';
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSaving(true);
     setError(null);
     const data = new FormData(event.currentTarget);
+    const expectedRaw = String(data.get('expectedRevenue') ?? '').trim();
+    const expectedRevenue = prospectReview ? Number(expectedRaw) : null;
+
+    if (prospectReview && (!expectedRaw || !Number.isFinite(expectedRevenue) || expectedRevenue <= 0)) {
+      setError('Enter the expected revenue before submitting this Lead for Prospect Review.');
+      setSaving(false);
+      return;
+    }
+
     try {
       await onConfirm(
-        String(data.get("stage")) as LeadStage,
-        String(data.get("reason") ?? "").trim() || null,
+        nextStage,
+        String(data.get('reason') ?? '').trim() || null,
+        expectedRevenue,
       );
     } catch (caught) {
-      setError(
-        caught instanceof Error ? caught.message : "Unable to change stage.",
-      );
+      setError(caught instanceof Error ? caught.message : 'Unable to change stage.');
       setSaving(false);
     }
   }
+
   return (
     <DialogFrame
-      title="Change Stage"
-      description={`Current stage: ${stageLabel(stage)}`}
+      title={prospectReview ? 'Submit for Prospect Review' : 'Change Stage'}
+      description={prospectReview
+        ? 'This is the commercial handoff point. Add the expected value of the opportunity before Admin reviews it as a Prospect.'
+        : `Current stage: ${stageLabel(stage)}`}
       saving={saving}
       onClose={onClose}
     >
@@ -248,39 +264,51 @@ export function ChangeStageDialog({
                 id="next-stage"
                 name="stage"
                 label="Move to"
+                value={nextStage}
+                onChange={(event) => setNextStage(event.target.value as LeadStage)}
                 required
               >
                 {allowed.map((next) => (
-                  <option key={next} value={next}>
-                    {stageLabel(next)}
-                  </option>
+                  <option key={next} value={next}>{stageLabel(next)}</option>
                 ))}
               </NativeSelect>
+
+              {prospectReview ? (
+                <div className="prospect-gate-field">
+                  <Input
+                    id="expected-revenue"
+                    name="expectedRevenue"
+                    label="Expected revenue (₦) *"
+                    type="number"
+                    min="1"
+                    step="0.01"
+                    placeholder="e.g. 2500000"
+                    required
+                    help="This value starts at Prospect Review. Lead intake and ordinary Lead work remain non-financial."
+                  />
+                  <div className="prospect-gate-note">
+                    <strong>What happens next?</strong>
+                    <span>Admin receives the Prospect recommendation in-app and by email. If approved, this expected value moves with the relationship into Prospects.</span>
+                  </div>
+                </div>
+              ) : null}
+
               <Textarea
                 id="stage-reason"
                 name="reason"
-                label="Note / reason (optional)"
+                label={prospectReview ? 'Recommendation note (optional)' : 'Note / reason (optional)'}
                 rows={3}
               />
             </>
           ) : (
-            <Alert tone="info">
-              No next stage is available from the current state.
-            </Alert>
+            <Alert tone="info">No next stage is available from the current state.</Alert>
           )}
         </div>
         <footer>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={onClose}
-            disabled={saving}
-          >
-            Cancel
-          </Button>
+          <Button type="button" variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
           {allowed.length ? (
             <Button type="submit" loading={saving}>
-              Change Stage
+              {prospectReview ? 'Submit for Review' : 'Change Stage'}
             </Button>
           ) : null}
         </footer>

@@ -79,6 +79,8 @@ export class LeadsRepository {
         c.email AS contact_email, u.first_name AS owner_first_name,
         u.last_name AS owner_last_name, u.email AS owner_email,
         t.name AS assigned_team_name, tm.first_name AS team_lead_first_name, tm.last_name AS team_lead_last_name,
+        cb.first_name AS claimed_by_first_name, cb.last_name AS claimed_by_last_name,
+        pb.first_name AS pool_published_by_first_name, pb.last_name AS pool_published_by_last_name,
         (l.proposed_revenue * l.revenue_probability / 100.0) AS weighted_revenue,
         latest_batch.id AS current_assignment_batch_id,
         latest_batch.title AS current_assignment_title,
@@ -90,6 +92,8 @@ export class LeadsRepository {
       LEFT JOIN users u ON u.id = l.assigned_to_id
       LEFT JOIN teams t ON t.id = l.assigned_team_id
       LEFT JOIN users tm ON tm.id = t.manager_id
+      LEFT JOIN users cb ON cb.id = l.claimed_by_id
+      LEFT JOIN users pb ON pb.id = l.pool_published_by_id
       LEFT JOIN LATERAL (
         SELECT lab.id, lab.title, lab.task_id, lab.due_at
         FROM lead_assignment_batch_items labi
@@ -120,7 +124,7 @@ export class LeadsRepository {
   async findLeadPoolByIds(ids: string[]) {
     if (!ids.length) return [];
     const result = await this.db.query(`
-      SELECT l.id, l.organization_id, l.assigned_to_id, l.stage, l.priority,
+      SELECT l.id, l.organization_id, l.assigned_to_id, l.assigned_team_id, l.available_in_pool, l.stage, l.priority,
         o.name AS organization_name
       FROM leads l
       JOIN organizations o ON o.id = l.organization_id
@@ -168,7 +172,7 @@ export class LeadsRepository {
       input.organizationName, input.industry ?? null, input.email ?? null,
       input.phone ?? null, input.website ?? null, location || null,
       input.notes ?? null, createdById ?? null, input.source ?? null,
-      input.priority ?? 'MEDIUM', input.proposedRevenue ?? 1000000, input.revenueProbability ?? 30,
+      input.priority ?? 'MEDIUM', input.proposedRevenue ?? 0, input.revenueProbability ?? 0,
     ]);
     return result.rows[0];
   }
@@ -223,7 +227,7 @@ export class LeadsRepository {
           INSERT INTO leads (organization_id,title,source,stage,priority,notes,created_by_id,record_type,pursuit_progress,proposed_revenue,revenue_probability)
           VALUES ($1,$2,$3,'NEW'::lead_stage,$4,$5,$6,'LEAD'::lead_record_type,0,$7,$8)
           RETURNING id
-        `, [organizationId,row.organizationName,row.source??null,row.priority??'MEDIUM',row.notes??null,createdById??null,row.proposedRevenue??1000000,row.revenueProbability??30]);
+        `, [organizationId,row.organizationName,row.source??null,row.priority??'MEDIUM',row.notes??null,createdById??null,row.proposedRevenue??0,row.revenueProbability??0]);
         created.push({rowNumber:row.rowNumber,leadId:lead.rows[0].id,organizationId:organizationId!,organizationName:row.organizationName,reusedOrganization});
       }
       await client.query('COMMIT');
@@ -327,6 +331,7 @@ export class LeadsRepository {
       await client.query('BEGIN');
       const result = await client.query(`
         UPDATE leads SET assigned_to_id=$2,
+          available_in_pool=false,
           stage=CASE WHEN stage::text='NEW' AND $2::uuid IS NOT NULL THEN 'ASSIGNED'::lead_stage ELSE stage END,
           first_assigned_at=CASE WHEN first_assigned_at IS NULL AND $2::uuid IS NOT NULL THEN NOW() ELSE first_assigned_at END,
           last_assigned_at=CASE WHEN $2::uuid IS NOT NULL THEN NOW() ELSE last_assigned_at END,
@@ -341,6 +346,7 @@ export class LeadsRepository {
          VALUES ($1,$2,$3,$4,$5)`,
         [id, previousOwnerId, input.assignedToId, assignedById ?? null, input.reason ?? null],
       );
+      if (input.assignedToId) await this.ensureDefaultPursuitInstance(client, id);
       await client.query('COMMIT');
       return this.findById(id);
     } catch (error) {
@@ -557,6 +563,7 @@ export class LeadsRepository {
         await client.query(`
           UPDATE leads
           SET assigned_to_id=$2,
+              available_in_pool=false,
               stage=CASE WHEN stage::text='NEW' THEN 'ASSIGNED'::lead_stage ELSE stage END,
               first_assigned_at=CASE WHEN first_assigned_at IS NULL THEN NOW() ELSE first_assigned_at END,
               last_assigned_at=NOW(),
@@ -581,12 +588,68 @@ export class LeadsRepository {
       client.release();
     }
   }
+  private async ensureDefaultPursuitInstance(client:any,leadId:string){
+    const existing=(await client.query(`SELECT id FROM lead_pursuit_instances WHERE lead_id=$1 ORDER BY created_at DESC LIMIT 1`,[leadId])).rows[0];
+    if(existing?.id)return existing.id;
+    const workflow=(await client.query(`SELECT id FROM lead_pursuit_workflows WHERE is_default=true AND is_active=true LIMIT 1`)).rows[0];
+    if(!workflow?.id)return null;
+    const instance=(await client.query(`INSERT INTO lead_pursuit_instances(lead_id,batch_id,source_workflow_id) VALUES($1,NULL,$2) RETURNING id`,[leadId,workflow.id])).rows[0];
+    const steps=(await client.query(`SELECT title,description,evidence_required FROM lead_pursuit_workflow_steps WHERE workflow_id=$1 ORDER BY position`,[workflow.id])).rows;
+    for(let i=0;i<steps.length;i+=1){
+      const step=steps[i];
+      await client.query(`INSERT INTO lead_pursuit_instance_steps(instance_id,title,description,position,evidence_required) VALUES($1,$2,$3,$4,$5)`,[instance.id,step.title,step.description??null,i+1,!!step.evidence_required]);
+    }
+    return instance.id;
+  }
+
   async availablePool(userId:string){
-    const result=await this.db.query(`${this.selectSql()} WHERE l.record_type='LEAD'::lead_record_type AND l.assigned_to_id IS NULL AND l.assigned_team_id IS NULL AND l.stage='NEW' ORDER BY l.priority DESC,l.proposed_revenue DESC,l.created_at DESC`);
+    const result=await this.db.query(`${this.selectSql()} WHERE l.record_type='LEAD'::lead_record_type AND l.available_in_pool=true AND l.assigned_to_id IS NULL AND l.assigned_team_id IS NULL AND l.stage='NEW' ORDER BY CASE l.priority WHEN 'URGENT' THEN 1 WHEN 'HIGH' THEN 2 WHEN 'MEDIUM' THEN 3 ELSE 4 END,l.pool_published_at DESC NULLS LAST,l.created_at DESC`);
     return result.rows;
   }
+
+  async publishToPool(ids:string[],publishedById?:string|null){
+    if(!ids.length)return[];
+    const result=await this.db.query(`
+      UPDATE leads
+      SET available_in_pool=true,pool_published_at=NOW(),pool_published_by_id=$2,updated_at=NOW()
+      WHERE id=ANY($1::uuid[])
+        AND record_type='LEAD'
+        AND stage='NEW'
+        AND assigned_to_id IS NULL
+        AND assigned_team_id IS NULL
+      RETURNING id
+    `,[ids,publishedById??null]);
+    return result.rows;
+  }
+
+  async removeFromPool(id:string){
+    const result=await this.db.query(`UPDATE leads SET available_in_pool=false,updated_at=NOW() WHERE id=$1 AND record_type='LEAD' AND assigned_to_id IS NULL AND assigned_team_id IS NULL RETURNING *`,[id]);
+    return result.rows[0]??null;
+  }
+
   async claimLead(id:string,userId:string){
-    const result=await this.db.query(`UPDATE leads SET assigned_to_id=$2,claimed_by_id=$2,claimed_at=NOW(),stage='ASSIGNED',updated_at=NOW() WHERE id=$1 AND record_type='LEAD' AND assigned_to_id IS NULL AND assigned_team_id IS NULL RETURNING *`,[id,userId]);
+    const client=await this.db.getClient();
+    try{
+      await client.query('BEGIN');
+      const claimed=(await client.query(`
+        UPDATE leads
+        SET assigned_to_id=$2,claimed_by_id=$2,claimed_at=NOW(),available_in_pool=false,stage='ASSIGNED',
+            first_assigned_at=COALESCE(first_assigned_at,NOW()),last_assigned_at=NOW(),updated_at=NOW()
+        WHERE id=$1 AND record_type='LEAD' AND available_in_pool=true AND assigned_to_id IS NULL AND assigned_team_id IS NULL AND stage='NEW'
+        RETURNING *
+      `,[id,userId])).rows[0];
+      if(!claimed){await client.query('ROLLBACK');return null;}
+
+      await client.query(`INSERT INTO lead_assignments(lead_id,previous_owner_id,assigned_to_id,assigned_by_id,reason) VALUES($1,NULL,$2,$2,'Self-selected from Lead Pool')`,[id,userId]);
+
+      await this.ensureDefaultPursuitInstance(client,id);
+      await client.query('COMMIT');
+      return claimed;
+    }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
+  }
+
+  async updateStageWithExpectedRevenue(id:string,stage:LeadStage,expectedRevenue?:number|null){
+    const result=await this.db.query(`UPDATE leads SET stage=$2::lead_stage,expected_revenue=CASE WHEN $3::numeric IS NULL THEN expected_revenue ELSE $3::numeric END,updated_at=NOW() WHERE id=$1 RETURNING *`,[id,stage,expectedRevenue??null]);
     return result.rows[0]??null;
   }
   async teamExists(teamId:string){
@@ -594,8 +657,14 @@ export class LeadsRepository {
     return Boolean(result.rows[0]?.exists);
   }
   async assignTeam(id:string,teamId:string|null){
-    const result=await this.db.query(`UPDATE leads SET assigned_team_id=$2,assigned_to_id=NULL,stage=CASE WHEN $2::uuid IS NULL THEN 'NEW'::lead_stage ELSE 'ASSIGNED'::lead_stage END,updated_at=NOW() WHERE id=$1 RETURNING *`,[id,teamId]);
-    return result.rows[0]??null;
+    const client=await this.db.getClient();
+    try{
+      await client.query('BEGIN');
+      const row=(await client.query(`UPDATE leads SET assigned_team_id=$2,assigned_to_id=NULL,available_in_pool=false,stage=CASE WHEN $2::uuid IS NULL THEN 'NEW'::lead_stage ELSE 'ASSIGNED'::lead_stage END,updated_at=NOW() WHERE id=$1 RETURNING *`,[id,teamId])).rows[0]??null;
+      if(row && teamId) await this.ensureDefaultPursuitInstance(client,id);
+      await client.query('COMMIT');
+      return row;
+    }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
   }
   async updateRevenue(id:string,proposed:number,probability:number,actual:number|null){
     const result=await this.db.query(`UPDATE leads SET proposed_revenue=$2,revenue_probability=$3,actual_revenue=$4,updated_at=NOW() WHERE id=$1 RETURNING *`,[id,proposed,probability,actual]);

@@ -3,6 +3,7 @@ import { TasksModule } from "../tasks/tasks.module.js";
 import { ActivitiesModule } from "../activities/activities.module.js";
 import { ContactsModule } from "../contacts/contacts.module.js";
 import { PursuitWorkflowsModule } from "../pursuit-workflows/pursuit-workflows.module.js";
+import { StaffMailService } from "../mailer/staff-mail.service.js";
 
 import { LeadsController } from "./leads.controller.js";
 import { LeadsRepository } from "./leads.repository.js";
@@ -17,7 +18,7 @@ import { StaffLeadsController } from "./staff-leads.controller.js";
     PursuitWorkflowsModule,
   ],
   controllers: [LeadsController, StaffLeadsController],
-  providers: [LeadsRepository, LeadsService],
+  providers: [LeadsRepository, LeadsService, StaffMailService],
   exports: [LeadsService],
 })
 export class LeadsModule {}

@@ -12,6 +12,8 @@ import { LeadsService } from './leads.service.js';
 export class LeadsController {
   constructor(private readonly leads: LeadsService) {}
   @Get() @RequirePermission('leads.read.all') async list(){return{success:true,data:await this.leads.list()};}
+  @Post('pool/publish') @RequirePermission('leads.assign') async publishPool(@Body()body:{leadIds?:string[]},@Req()request:AuthenticatedRequest,@Headers('user-agent')ua?:string){return{success:true,data:await this.leads.publishToPool(body.leadIds??[],this.context(request,ua))};}
+  @Post(':id/pool/remove') @RequirePermission('leads.assign') async removePool(@Param('id')id:string,@Req()request:AuthenticatedRequest,@Headers('user-agent')ua?:string){return{success:true,data:await this.leads.removeFromPool(id,this.context(request,ua))};}
   @Post('bulk-assign') @RequirePermission('leads.assign') async bulkAssign(@Body()body:Partial<BulkAssignmentInput>,@Req()request:AuthenticatedRequest,@Headers('user-agent')ua?:string){return{success:true,data:await this.leads.bulkAssign(body,this.context(request,ua))};}
   @Get('assignment-batches/:batchId')
   @RequirePermission('leads.read.all')
@@ -52,7 +54,7 @@ export class LeadsController {
   @Get(':id') @RequirePermission('leads.read.all') async get(@Param('id')id:string){return{success:true,data:await this.leads.get(id)};}
   @Get(':id/assignments') @RequirePermission('leads.read.all') async assignments(@Param('id')id:string){return{success:true,data:await this.leads.assignments(id)};}
   @Post(':id/reassign') @RequirePermission('leads.assign') async reassign(@Param('id')id:string,@Body()body:Partial<AssignmentInput>,@Req()request:AuthenticatedRequest,@Headers('user-agent')ua?:string){return{success:true,data:await this.leads.reassign(id,body,this.context(request,ua))};}
-  @Post(':id/stage') @RequirePermission('leads.update.all') async changeStage(@Param('id')id:string,@Body()body:{stage:LeadStage;reason?:string|null},@Req()request:AuthenticatedRequest,@Headers('user-agent')ua?:string){return{success:true,data:await this.leads.changeStage(id,body.stage,this.context(request,ua),undefined,body.reason)};}
+  @Post(':id/stage') @RequirePermission('leads.update.all') async changeStage(@Param('id')id:string,@Body()body:{stage:LeadStage;reason?:string|null;expectedRevenue?:number|null},@Req()request:AuthenticatedRequest,@Headers('user-agent')ua?:string){return{success:true,data:await this.leads.changeStage(id,body.stage,this.context(request,ua),undefined,body.reason,body.expectedRevenue)};}
   @Post('import/preview') @RequirePermission('leads.create') async previewImport(@Body()body:{rows?:any[]}){return{success:true,data:await this.leads.previewImport(body)};}
   @Post('import/commit') @RequirePermission('leads.create') async commitImport(@Body()body:{rows?:any[]},@Req()request:AuthenticatedRequest,@Headers('user-agent')ua?:string){return{success:true,data:await this.leads.commitImport(body,this.context(request,ua))};}
   @Post('organization') @RequirePermission('leads.create') async createOrganizationLead(@Body()body:Partial<OrganizationLeadInput>,@Req()request:AuthenticatedRequest,@Headers('user-agent')ua?:string){return{success:true,data:await this.leads.createOrganizationLead(body,this.context(request,ua))};}

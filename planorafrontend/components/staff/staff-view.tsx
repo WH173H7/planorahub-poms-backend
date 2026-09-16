@@ -1,9 +1,714 @@
 'use client';
-import Link from 'next/link';import {useEffect,useMemo,useState} from 'react';import {AppShell} from '@/components/shell/app-shell';import {Badge} from '@/components/ui/badge';import {Button} from '@/components/ui/button';import {Card} from '@/components/ui/card';import {Input} from '@/components/ui/input';import {Modal} from '@/components/ui/modal';import {NativeSelect} from '@/components/ui/native-select';import {Textarea} from '@/components/ui/textarea';import {createStaff,listRoles,listStaff,setStaffStatus,type Role,type Staff} from '@/lib/staff/api';import {createManagedDepartment,createManagedTeam,listManagedDepartments,listManagedTeams,updateManagedTeamMembers} from '@/lib/workspace/ops-api';
-type Tab='STAFF'|'DEPARTMENTS'|'TEAMS';
-export function StaffView(){const[tab,setTab]=useState<Tab>('STAFF'),[rows,setRows]=useState<Staff[]>([]),[roles,setRoles]=useState<Role[]>([]),[deps,setDeps]=useState<any[]>([]),[teams,setTeams]=useState<any[]>([]),[q,setQ]=useState(''),[open,setOpen]=useState(false),[structure,setStructure]=useState<'DEPARTMENT'|'TEAM'|null>(null),[created,setCreated]=useState<{name:string;password:string}|null>(null);async function load(){const[r,ro,d,t]=await Promise.all([listStaff(),listRoles(),listManagedDepartments(),listManagedTeams()]);setRows(r);setRoles(ro);setDeps(d);setTeams(t)}useEffect(()=>{void load()},[]);const visible=useMemo(()=>rows.filter(s=>!q.trim()||[s.first_name,s.last_name,s.email,s.job_title,s.role_name,s.department_name].filter(Boolean).join(' ').toLowerCase().includes(q.toLowerCase())),[rows,q]);return <AppShell area="admin" title="Staff" breadcrumb="People" description="Departments define where staff belong. Teams can bring people from different departments together around shared work." actions={<>{tab==='STAFF'?<Button onClick={()=>setOpen(true)} disabled={!deps.some(d=>d.is_active)}>+ Add Staff</Button>:<Button onClick={()=>setStructure(tab==='DEPARTMENTS'?'DEPARTMENT':'TEAM')}>+ {tab==='DEPARTMENTS'?'Department':'Team'}</Button>}</>}><div className="page-stack"><Card><div className="ui-card-content"><span className="eyebrow">Staff Operations hierarchy</span><h2 style={{marginBottom:6}}>Departments → Staff → cross-department Teams → Lead ownership</h2><p className="ui-help">Departments are the permanent home of staff. Teams are flexible work groups that can combine people across Departments and can own Leads together.</p><div style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:10,marginTop:14}}><div className="metric-card"><span>Departments</span><strong>{deps.filter(d=>d.is_active).length}</strong></div><div className="metric-card"><span>Active staff</span><strong>{rows.filter(s=>s.status==='ACTIVE').length}</strong></div><div className="metric-card"><span>Active Teams</span><strong>{teams.filter(t=>t.is_active).length}</strong></div></div></div></Card><Card><div className="ui-card-content" style={{display:'flex',gap:8}}>{(['STAFF','DEPARTMENTS','TEAMS'] as Tab[]).map(x=><Button key={x} variant={tab===x?'primary':'outline'} onClick={()=>setTab(x)}>{x==='STAFF'?'Staff members':x[0]+x.slice(1).toLowerCase()}</Button>)}</div></Card>{tab==='STAFF'?<>{!deps.some(d=>d.is_active)?<Card><div className="ui-card-content"><strong>Create a department first</strong><p className="ui-help">Every staff member must belong to a department before their account can be created.</p><Button onClick={()=>{setTab('DEPARTMENTS');setStructure('DEPARTMENT')}}>Create first department</Button></div></Card>:null}{created?<Card><div className="ui-card-content"><strong>{created.name} created.</strong><p className="ui-help">Temporary password (show once and share securely):</p><div className="temporary-password-line"><code style={{fontSize:16}}>{created.password}</code><Button size="sm" variant="outline" onClick={()=>void navigator.clipboard.writeText(created.password)}>Copy</Button></div></div></Card>:null}<Card><div className="ui-card-content"><Input placeholder="Search staff, role or department…" value={q} onChange={e=>setQ(e.target.value)}/></div></Card><Card><div style={{overflowX:'auto'}}><table className="ui-table"><thead><tr><th>Staff member</th><th>Role</th><th>Department</th><th>Teams</th><th>Status</th><th></th></tr></thead><tbody>{visible.map(s=><tr key={s.id}><td><Link href={`/staff/${s.id}`}><strong>{s.first_name} {s.last_name}</strong></Link><div className="ui-help">{s.email}{s.job_title?` · ${s.job_title}`:''}</div></td><td>{s.role_name||s.role_code}</td><td>{s.department_name||'—'}</td><td>{(s as any).team_names||'—'}</td><td><Badge tone={s.status==='ACTIVE'?'success':s.status==='INVITED'?'warning':'danger'}>{s.status}</Badge></td><td style={{display:'flex',gap:8}}><Link href={`/staff/${s.id}`}><Button size="sm" variant="outline">Open</Button></Link>{s.status==='ACTIVE'?<Button size="sm" variant="outline" onClick={async()=>{await setStaffStatus(s.id,'suspend');await load()}}>Suspend</Button>:<Button size="sm" variant="outline" onClick={async()=>{await setStaffStatus(s.id,'reactivate');await load()}}>Reactivate</Button>}</td></tr>)}</tbody></table></div></Card></>:tab==='DEPARTMENTS'?<DepartmentView deps={deps} staff={rows}/>:<TeamView teams={teams} staff={rows}/>}</div>{open?<CreateStaff roles={roles} deps={deps} teams={teams} onClose={()=>setOpen(false)} onCreated={async x=>{setCreated(x);setOpen(false);await load()}}/>:null}{structure?<StructureModal mode={structure} deps={deps} staff={rows} close={()=>setStructure(null)} saved={async()=>{setStructure(null);await load()}}/>:null}</AppShell>}
-function DepartmentView({deps,staff}:{deps:any[];staff:Staff[]}){return <div className="structure-grid">{deps.map(d=><Card key={d.id}><div className="ui-card-content"><span className="eyebrow">Department</span><h2>{d.name}</h2><p className="ui-help">{d.description||'No description yet.'}</p><strong>{staff.filter(s=>s.department_id===d.id).length} staff</strong><div style={{marginTop:12}}>{staff.filter(s=>s.department_id===d.id).slice(0,6).map(s=><div key={s.id} style={{padding:'7px 0',borderTop:'1px solid #eee'}}>{s.first_name} {s.last_name}<small className="ui-help" style={{display:'block'}}>{s.job_title||s.role_name}</small></div>)}</div></div></Card>)}</div>}
-function TeamView({teams,staff}:{teams:any[];staff:Staff[]}){const[editing,setEditing]=useState<any|null>(null);return <><div className="structure-grid">{teams.map(t=><Card key={t.id}><div className="ui-card-content"><span className="eyebrow">Cross-department team</span><h2>{t.name}</h2><p className="ui-help">{t.description||'No description.'}</p><div><strong>{t.member_count||0} members</strong><small className="ui-help" style={{display:'block'}}>Team lead: {t.manager_first_name?`${t.manager_first_name} ${t.manager_last_name}`:'Not assigned'}</small></div><Button variant="outline" style={{marginTop:12}} onClick={()=>setEditing(t)}>Manage members</Button></div></Card>)}</div>{editing?<TeamMembers team={editing} staff={staff} close={()=>setEditing(null)}/>:null}</>}
-function TeamMembers({team,staff,close}:{team:any;staff:Staff[];close:()=>void}){const[ids,setIds]=useState<string[]>([]),[lead,setLead]=useState(team.manager_id||''),[saving,setSaving]=useState(false);useEffect(()=>{import('@/lib/workspace/ops-api').then(m=>m.listManagedTeamMembers(team.id)).then(x=>setIds(x.map((r:any)=>r.id)))},[team.id]);return <Modal open onClose={close} title={`Manage ${team.name}`}><div className="stack"><NativeSelect label="Team lead" value={lead} onChange={e=>setLead(e.target.value)}><option value="">No team lead</option>{staff.filter(s=>s.status==='ACTIVE').map(s=><option key={s.id} value={s.id}>{s.first_name} {s.last_name} · {s.department_name||'No department'}</option>)}</NativeSelect><div><strong>Members</strong><p className="ui-help">Teams can contain staff from different departments.</p>{staff.filter(s=>s.status==='ACTIVE').map(s=><label key={s.id} style={{display:'flex',gap:10,padding:'8px 0',borderTop:'1px solid #eee'}}><input type="checkbox" checked={ids.includes(s.id)} onChange={e=>setIds(x=>e.target.checked?[...x,s.id]:x.filter(id=>id!==s.id))}/><span>{s.first_name} {s.last_name}<small className="ui-help" style={{display:'block'}}>{s.department_name||'No department'} · {s.job_title||s.role_name}</small></span></label>)}</div><div style={{display:'flex',justifyContent:'flex-end',gap:8}}><Button variant="outline" onClick={close}>Cancel</Button><Button loading={saving} onClick={async()=>{setSaving(true);await updateManagedTeamMembers(team.id,{memberIds:ids,managerId:lead||null});close()}}>Save team</Button></div></div></Modal>}
-function CreateStaff({roles,deps,teams,onClose,onCreated}:{roles:Role[];deps:any[];teams:any[];onClose:()=>void;onCreated:(x:{name:string;password:string})=>Promise<void>}){const[f,setF]=useState({firstName:'',lastName:'',email:'',phone:'',jobTitle:'',roleId:'',departmentId:'',teamIds:[] as string[]}),[saving,setSaving]=useState(false),[e,setE]=useState<string|null>(null);const set=(k:string,v:any)=>setF(x=>({...x,[k]:v}));return <Modal open onClose={onClose} title="Add Staff"><form className="stack" onSubmit={async ev=>{ev.preventDefault();setSaving(true);try{const r=await createStaff({...f,permissionOverrides:[]});await onCreated({name:`${f.firstName} ${f.lastName}`,password:r.temporaryPassword})}catch(x){setE(x instanceof Error?x.message:'Unable to create staff.');setSaving(false)}}}><div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}><Input label="First name *" value={f.firstName} onChange={e=>set('firstName',e.target.value)} required/><Input label="Last name *" value={f.lastName} onChange={e=>set('lastName',e.target.value)} required/><Input label="Email *" type="email" value={f.email} onChange={e=>set('email',e.target.value)} required/><Input label="Phone" value={f.phone} onChange={e=>set('phone',e.target.value)}/><Input label="Job title" value={f.jobTitle} onChange={e=>set('jobTitle',e.target.value)}/><NativeSelect label="Role *" value={f.roleId} onChange={e=>set('roleId',e.target.value)} required><option value="">Select role</option>{roles.filter(r=>r.code!=='SUPER_ADMIN').map(r=><option key={r.id} value={r.id}>{r.name}</option>)}</NativeSelect><NativeSelect label="Department *" value={f.departmentId} onChange={e=>set('departmentId',e.target.value)} required><option value="">Select department</option>{deps.filter(d=>d.is_active).map(d=><option key={d.id} value={d.id}>{d.name}</option>)}</NativeSelect></div><div><strong>Teams (optional)</strong><p className="ui-help">Teams are cross-department work groups. You can add this staff member to any team.</p>{teams.filter(t=>t.is_active).map(t=><label key={t.id} style={{display:'inline-flex',gap:6,margin:'6px 12px 6px 0'}}><input type="checkbox" checked={f.teamIds.includes(t.id)} onChange={e=>set('teamIds',e.target.checked?[...f.teamIds,t.id]:f.teamIds.filter(id=>id!==t.id))}/>{t.name}</label>)}</div>{e?<p style={{color:'#a42323'}}>{e}</p>:null}<div style={{display:'flex',justifyContent:'flex-end',gap:8}}><Button type="button" variant="outline" onClick={onClose}>Cancel</Button><Button type="submit" loading={saving}>Create Staff</Button></div></form></Modal>}
-function StructureModal({mode,deps,staff,close,saved}:{mode:'DEPARTMENT'|'TEAM';deps:any[];staff:Staff[];close:()=>void;saved:()=>Promise<void>}){const[name,setName]=useState(''),[description,setDescription]=useState(''),[departmentId,setDepartmentId]=useState(''),[managerId,setManagerId]=useState(''),[saving,setSaving]=useState(false);return <Modal open onClose={close} title={mode==='DEPARTMENT'?'New department':'New team'}><form className="stack" onSubmit={async e=>{e.preventDefault();setSaving(true);if(mode==='DEPARTMENT')await createManagedDepartment({name,description});else await createManagedTeam({name,description,departmentId:departmentId||null,managerId:managerId||null});await saved()}}><Input label="Name *" value={name} onChange={e=>setName(e.target.value)} required/><Textarea label="Description" value={description} onChange={e=>setDescription(e.target.value)} rows={3}/>{mode==='TEAM'?<><NativeSelect label="Home department (optional)" value={departmentId} onChange={e=>setDepartmentId(e.target.value)}><option value="">Cross-department team</option>{deps.filter(d=>d.is_active).map(d=><option key={d.id} value={d.id}>{d.name}</option>)}</NativeSelect><NativeSelect label="Team lead" value={managerId} onChange={e=>setManagerId(e.target.value)}><option value="">Assign later</option>{staff.filter(s=>s.status==='ACTIVE').map(s=><option key={s.id} value={s.id}>{s.first_name} {s.last_name} · {s.department_name||'No department'}</option>)}</NativeSelect></>:null}<div style={{display:'flex',justifyContent:'flex-end',gap:8}}><Button type="button" variant="outline" onClick={close}>Cancel</Button><Button type="submit" loading={saving}>Create</Button></div></form></Modal>}
+
+import Link from 'next/link';
+import { useEffect, useMemo, useState } from 'react';
+import { AppShell } from '@/components/shell/app-shell';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Modal } from '@/components/ui/modal';
+import { NativeSelect } from '@/components/ui/native-select';
+import { PageErrorState } from '@/components/ui/page-state';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Textarea } from '@/components/ui/textarea';
+import {
+  listPermissions,
+  listRoles,
+  listStaff,
+  setStaffStatus,
+  type MailDelivery,
+  type Permission,
+  type Role,
+  type Staff,
+} from '@/lib/staff/api';
+import {
+  createManagedDepartment,
+  createManagedTeam,
+  listManagedDepartments,
+  listManagedTeamMembers,
+  listManagedTeams,
+  patchManagedDepartment,
+  patchManagedTeam,
+  updateManagedTeamMembers,
+} from '@/lib/workspace/ops-api';
+import { CreateStaffWizard } from './create-staff-wizard';
+import { RoleManagement } from './role-management';
+
+type Tab = 'STAFF' | 'ROLES' | 'DEPARTMENTS' | 'TEAMS';
+type Department = {
+  id: string;
+  name: string;
+  description?: string | null;
+  is_active: boolean;
+  staff_count?: number;
+  team_count?: number;
+};
+type Team = {
+  id: string;
+  name: string;
+  description?: string | null;
+  department_id?: string | null;
+  department_name?: string | null;
+  manager_id?: string | null;
+  manager_first_name?: string | null;
+  manager_last_name?: string | null;
+  member_count?: number;
+  is_active: boolean;
+};
+
+export function StaffView() {
+  const [tab, setTab] = useState<Tab>('STAFF');
+  const [rows, setRows] = useState<Staff[]>([]);
+  const [roles, setRoles] = useState<Role[]>([]);
+  const [permissions, setPermissions] = useState<Permission[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
+  const [teams, setTeams] = useState<Team[]>([]);
+  const [query, setQuery] = useState('');
+  const [openStaff, setOpenStaff] = useState(false);
+  const [structure, setStructure] = useState<'DEPARTMENT' | 'TEAM' | null>(null);
+  const [created, setCreated] = useState<{ name: string; email: string; password: string; emailDelivery: MailDelivery } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  async function load() {
+    setError(null);
+    try {
+      const [staff, roleRows, permissionRows, departmentRows, teamRows] = await Promise.all([
+        listStaff(),
+        listRoles(),
+        listPermissions(),
+        listManagedDepartments(),
+        listManagedTeams(),
+      ]);
+      setRows(staff);
+      setRoles(roleRows);
+      setPermissions(permissionRows);
+      setDepartments(departmentRows as Department[]);
+      setTeams(teamRows as Team[]);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Unable to load staff operations.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void load();
+    if (window.location.hash === '#roles') setTab('ROLES');
+    else if (window.location.hash === '#departments') setTab('DEPARTMENTS');
+    else if (window.location.hash === '#teams') setTab('TEAMS');
+    else if (window.location.hash === '#staff') setTab('STAFF');
+  }, []);
+
+  const visible = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return rows;
+    return rows.filter((staff) =>
+      [
+        staff.first_name,
+        staff.last_name,
+        staff.email,
+        staff.job_title,
+        staff.role_name,
+        staff.department_name,
+        (staff as Staff & { team_names?: string }).team_names,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+        .includes(needle),
+    );
+  }, [rows, query]);
+
+  const activeDepartments = departments.filter((department) => department.is_active);
+  const activeStaff = rows.filter((staff) => staff.status === 'ACTIVE');
+  const invitedStaff = rows.filter((staff) => staff.status === 'INVITED');
+  const activeTeams = teams.filter((team) => team.is_active);
+  const activeRoles = roles.filter((role) => role.code !== 'SUPER_ADMIN' && role.is_active !== false && (role.code === 'MARKETING' || !role.is_system_role));
+
+
+  return (
+    <AppShell
+      area="admin"
+      title="Staff & Access"
+      breadcrumb="People"
+      description="Manage people, access, departments, teams and staff invitations from one workforce workspace."
+      actions={
+        <Button onClick={() => setOpenStaff(true)} disabled={!activeDepartments.length || !activeRoles.length}>+ Add Staff</Button>
+      }
+    >
+      {loading ? <Skeleton height={480} /> : error ? <PageErrorState message={error} /> : (
+        <div className="page-stack staff-page staff-page--p20">
+          <section className="staff-control-hero">
+            <div className="staff-control-copy">
+              <span className="eyebrow">Workforce control center</span>
+              <h2>Build the team in the right order.</h2>
+              <p>
+                Define access once, organize the company, then invite staff with the correct role, department, teams and first-login security already attached.
+              </p>
+            </div>
+            <div className="staff-control-actions" aria-label="Staff quick actions">
+              <Button variant="outline" onClick={() => setTab('ROLES')}>Manage roles</Button>
+              <Button variant="outline" onClick={() => { setTab('DEPARTMENTS'); setStructure('DEPARTMENT'); }}>+ Department</Button>
+              <Button variant="outline" onClick={() => { setTab('TEAMS'); setStructure('TEAM'); }}>+ Team</Button>
+            </div>
+          </section>
+
+          <section className="staff-setup-flow" aria-label="Workforce setup flow">
+            <button type="button" className={tab === 'ROLES' ? 'is-active' : ''} onClick={() => setTab('ROLES')}>
+              <span className="staff-setup-step">01</span>
+              <span><strong>Roles & access</strong><small>{activeRoles.length} active role{activeRoles.length === 1 ? '' : 's'}</small></span>
+              <b>Define permissions</b>
+            </button>
+            <button type="button" className={tab === 'DEPARTMENTS' ? 'is-active' : ''} onClick={() => setTab('DEPARTMENTS')}>
+              <span className="staff-setup-step">02</span>
+              <span><strong>Departments</strong><small>{activeDepartments.length} active</small></span>
+              <b>Organize people</b>
+            </button>
+            <button type="button" className={tab === 'TEAMS' ? 'is-active' : ''} onClick={() => setTab('TEAMS')}>
+              <span className="staff-setup-step">03</span>
+              <span><strong>Teams</strong><small>{activeTeams.length} active</small></span>
+              <b>Group work</b>
+            </button>
+            <button type="button" className={tab === 'STAFF' ? 'is-active' : ''} onClick={() => setTab('STAFF')}>
+              <span className="staff-setup-step">04</span>
+              <span><strong>Staff</strong><small>{activeStaff.length} active · {invitedStaff.length} invited</small></span>
+              <b>Invite people</b>
+            </button>
+          </section>
+
+          <section className="staff-workspace-card staff-workspace-card--direct">
+            <div className="staff-workspace-body">
+              {tab === 'STAFF' ? (
+                <StaffDirectory
+                  rows={visible}
+                  allRows={rows}
+                  query={query}
+                  setQuery={setQuery}
+                  departments={departments}
+                  created={created}
+                  onCreateDepartment={() => {
+                    setTab('DEPARTMENTS');
+                    setStructure('DEPARTMENT');
+                  }}
+                  onReload={load}
+                />
+              ) : tab === 'ROLES' ? (
+                <RoleManagement roles={roles} permissions={permissions} onReload={load} />
+              ) : tab === 'DEPARTMENTS' ? (
+                <DepartmentView departments={departments} staff={rows} onReload={load} />
+              ) : (
+                <TeamView teams={teams} staff={rows} departments={departments} onReload={load} />
+              )}
+            </div>
+          </section>
+        </div>
+      )}
+
+      {openStaff ? (
+        <CreateStaffWizard
+          roles={roles}
+          permissions={permissions}
+          departments={departments}
+          teams={teams}
+          onClose={() => setOpenStaff(false)}
+          onCreated={async (result) => {
+            setCreated(result);
+            setOpenStaff(false);
+            setTab('STAFF');
+            await load();
+          }}
+        />
+      ) : null}
+
+      {structure ? (
+        <StructureModal
+          mode={structure}
+          departments={departments}
+          staff={rows}
+          close={() => setStructure(null)}
+          saved={async () => {
+            setStructure(null);
+            await load();
+          }}
+        />
+      ) : null}
+    </AppShell>
+  );
+}
+
+function StaffDirectory({
+  rows,
+  allRows,
+  query,
+  setQuery,
+  departments,
+  created,
+  onCreateDepartment,
+  onReload,
+}: {
+  rows: Staff[];
+  allRows: Staff[];
+  query: string;
+  setQuery: (value: string) => void;
+  departments: Department[];
+  created: { name: string; email: string; password: string; emailDelivery: MailDelivery } | null;
+  onCreateDepartment: () => void;
+  onReload: () => Promise<void>;
+}) {
+  const [status, setStatus] = useState<'ALL' | Staff['status']>('ALL');
+  const filteredRows = status === 'ALL' ? rows : rows.filter((staff) => staff.status === status);
+  const statusCounts = {
+    ALL: allRows.length,
+    ACTIVE: allRows.filter((staff) => staff.status === 'ACTIVE').length,
+    INVITED: allRows.filter((staff) => staff.status === 'INVITED').length,
+    SUSPENDED: allRows.filter((staff) => staff.status === 'SUSPENDED').length,
+  };
+
+  if (!departments.some((department) => department.is_active)) {
+    return (
+      <Card>
+        <div className="ui-card-content staff-empty-action">
+          <span className="eyebrow">Setup required</span>
+          <h2>Create a department first</h2>
+          <p className="ui-help">Every staff member must belong to an active department before their account can be created.</p>
+          <div><Button onClick={onCreateDepartment}>Create first department</Button></div>
+        </div>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="staff-directory">
+      {created ? (
+        <div className="staff-created-banner">
+          <div>
+            <span className="staff-created-check">✓</span>
+            <div>
+              <strong>{created.name} is ready to sign in.</strong>
+              <p>{created.email} · temporary password is shown once below.</p>
+              <small className={`credential-delivery credential-delivery--${created.emailDelivery.status.toLowerCase()}`}>{created.emailDelivery.message}</small>
+            </div>
+          </div>
+          <div className="temporary-password-line">
+            <code>{created.password}</code>
+            <Button size="sm" variant="outline" onClick={() => void navigator.clipboard.writeText(created.password)}>Copy password</Button>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="staff-directory-heading">
+        <div>
+          <span className="eyebrow">People directory</span>
+          <h2>Staff members</h2>
+          <p className="ui-help">Search the workforce, review access placement and open a person’s profile for deeper account controls.</p>
+        </div>
+        <div className="staff-directory-count"><strong>{allRows.length}</strong><span>Total staff</span></div>
+      </div>
+
+      <div className="staff-directory-toolbar staff-directory-toolbar--p20">
+        <Input
+          aria-label="Search staff"
+          placeholder="Search name, email, role, department or team…"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+        />
+        <div className="staff-status-filters" aria-label="Filter staff by status">
+          {(['ALL', 'ACTIVE', 'INVITED', 'SUSPENDED'] as const).map((value) => (
+            <button key={value} type="button" className={status === value ? 'is-active' : ''} onClick={() => setStatus(value)}>
+              {value === 'ALL' ? 'All' : value[0] + value.slice(1).toLowerCase()} <span>{statusCounts[value]}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <Card className="staff-table-card staff-table-card--p20">
+        <div className="table-wrap staff-table-wrap">
+          <table className="ui-table staff-directory-table">
+            <thead>
+              <tr>
+                <th>Staff member</th>
+                <th>Role & work</th>
+                <th>Department</th>
+                <th>Teams</th>
+                <th>Status</th>
+                <th><span className="sr-only">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredRows.map((staff) => {
+                const teams = ((staff as Staff & { team_names?: string }).team_names || '').split(',').map((item) => item.trim()).filter(Boolean);
+                return (
+                  <tr key={staff.id}>
+                    <td>
+                      <div className="staff-person-cell">
+                        <span className="staff-person-avatar" aria-hidden="true">{staff.first_name[0]}{staff.last_name[0]}</span>
+                        <div>
+                          <Link href={`/staff/${staff.id}`} className="staff-name-link"><strong>{staff.first_name} {staff.last_name}</strong></Link>
+                          <div className="ui-help">{staff.email}</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td><strong className="staff-table-primary">{staff.role_name || staff.role_code}</strong><span className="staff-table-secondary">{staff.job_title || 'No job title'}</span></td>
+                    <td>{staff.department_name || <span className="ui-help">Not assigned</span>}</td>
+                    <td><div className="staff-team-chips">{teams.length ? teams.slice(0, 2).map((team) => <span key={team}>{team}</span>) : <span className="staff-team-empty">None</span>}{teams.length > 2 ? <span>+{teams.length - 2}</span> : null}</div></td>
+                    <td><StaffStatus status={staff.status} /></td>
+                    <td>
+                      <div className="staff-row-actions">
+                        <Link href={`/staff/${staff.id}`}><Button size="sm" variant="outline">View profile</Button></Link>
+                        <StatusAction staff={staff} onReload={onReload} />
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      <div className="staff-mobile-list staff-mobile-list--p20">
+        {filteredRows.map((staff) => {
+          const teams = ((staff as Staff & { team_names?: string }).team_names || '').split(',').map((item) => item.trim()).filter(Boolean);
+          return (
+            <Card key={staff.id}>
+              <div className="staff-mobile-card">
+                <div className="staff-mobile-card-head">
+                  <div className="staff-person-cell">
+                    <span className="staff-person-avatar" aria-hidden="true">{staff.first_name[0]}{staff.last_name[0]}</span>
+                    <div>
+                      <Link href={`/staff/${staff.id}`} className="staff-name-link"><strong>{staff.first_name} {staff.last_name}</strong></Link>
+                      <div className="ui-help">{staff.email}</div>
+                    </div>
+                  </div>
+                  <StaffStatus status={staff.status} />
+                </div>
+                <div className="staff-mobile-card-meta">
+                  <div><span>Role</span>{staff.role_name || staff.role_code}</div>
+                  <div><span>Job title</span>{staff.job_title || '—'}</div>
+                  <div><span>Department</span>{staff.department_name || '—'}</div>
+                  <div><span>Teams</span>{teams.join(', ') || 'None'}</div>
+                </div>
+                <div className="staff-mobile-card-actions">
+                  <Link href={`/staff/${staff.id}`}><Button size="sm" variant="outline">View profile</Button></Link>
+                  <StatusAction staff={staff} onReload={onReload} />
+                </div>
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+
+      {!filteredRows.length ? (
+        <Card><div className="empty-state"><div><strong>No staff found.</strong><p className="ui-help">Try another search or status filter.</p></div></div></Card>
+      ) : null}
+    </div>
+  );
+}
+
+function StaffStatus({ status }: { status: Staff['status'] }) {
+  return <Badge tone={status === 'ACTIVE' ? 'success' : status === 'INVITED' ? 'warning' : 'danger'}>{status}</Badge>;
+}
+
+function StatusAction({ staff, onReload }: { staff: Staff; onReload: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const action = staff.status === 'ACTIVE' ? 'suspend' : 'reactivate';
+  return (
+    <Button
+      size="sm"
+      variant="outline"
+      loading={busy}
+      onClick={async () => {
+        setBusy(true);
+        try {
+          await setStaffStatus(staff.id, action);
+          await onReload();
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      {action === 'suspend' ? 'Suspend' : 'Reactivate'}
+    </Button>
+  );
+}
+
+function DepartmentView({
+  departments,
+  staff,
+  onReload,
+}: {
+  departments: Department[];
+  staff: Staff[];
+  onReload: () => Promise<void>;
+}) {
+  const [editing, setEditing] = useState<Department | null>(null);
+
+  return (
+    <>
+      <div className="structure-grid staff-structure-grid">
+        {departments.map((department) => {
+          const departmentStaff = staff.filter((member) => member.department_id === department.id);
+          return (
+            <Card key={department.id}>
+              <div className="ui-card-content structure-card">
+                <div className="structure-card-head">
+                  <div>
+                    <span className="eyebrow">Department</span>
+                    <h2>{department.name}</h2>
+                  </div>
+                  <Badge tone={department.is_active ? 'success' : 'neutral'}>{department.is_active ? 'Active' : 'Inactive'}</Badge>
+                </div>
+                <p className="ui-help structure-description">{department.description || 'No description yet.'}</p>
+                <div className="structure-stats">
+                  <span><strong>{departmentStaff.length}</strong> staff</span>
+                  <span><strong>{department.team_count ?? 0}</strong> teams</span>
+                </div>
+                <div className="structure-member-preview">
+                  {departmentStaff.slice(0, 4).map((member) => (
+                    <div key={member.id}>
+                      <span>{member.first_name} {member.last_name}</span>
+                      <small>{member.job_title || member.role_name}</small>
+                    </div>
+                  ))}
+                  {departmentStaff.length > 4 ? <small className="ui-help">+ {departmentStaff.length - 4} more staff</small> : null}
+                </div>
+                <div className="structure-card-actions">
+                  <Button size="sm" variant="outline" onClick={() => setEditing(department)}>Edit</Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={department.is_active && departmentStaff.some((member) => member.status === 'ACTIVE')}
+                    title={department.is_active && departmentStaff.some((member) => member.status === 'ACTIVE') ? 'Move or suspend active staff before deactivating this department.' : undefined}
+                    onClick={async () => {
+                      await patchManagedDepartment(department.id, { isActive: !department.is_active });
+                      await onReload();
+                    }}
+                  >
+                    {department.is_active ? 'Deactivate' : 'Reactivate'}
+                  </Button>
+                </div>
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+      {!departments.length ? <Card><div className="empty-state"><strong>No departments yet.</strong></div></Card> : null}
+      {editing ? <EditDepartment department={editing} close={() => setEditing(null)} saved={async () => { setEditing(null); await onReload(); }} /> : null}
+    </>
+  );
+}
+
+function TeamView({
+  teams,
+  staff,
+  departments,
+  onReload,
+}: {
+  teams: Team[];
+  staff: Staff[];
+  departments: Department[];
+  onReload: () => Promise<void>;
+}) {
+  const [membersTeam, setMembersTeam] = useState<Team | null>(null);
+  const [editing, setEditing] = useState<Team | null>(null);
+
+  return (
+    <>
+      <div className="structure-grid staff-structure-grid">
+        {teams.map((team) => (
+          <Card key={team.id}>
+            <div className="ui-card-content structure-card">
+              <div className="structure-card-head">
+                <div>
+                  <span className="eyebrow">{team.department_name || 'Cross-department team'}</span>
+                  <h2>{team.name}</h2>
+                </div>
+                <Badge tone={team.is_active ? 'success' : 'neutral'}>{team.is_active ? 'Active' : 'Inactive'}</Badge>
+              </div>
+              <p className="ui-help structure-description">{team.description || 'No description yet.'}</p>
+              <div className="structure-stats">
+                <span><strong>{team.member_count || 0}</strong> members</span>
+                <span>Lead: <strong>{team.manager_first_name ? `${team.manager_first_name} ${team.manager_last_name}` : 'Not assigned'}</strong></span>
+              </div>
+              <div className="structure-card-actions">
+                <Button size="sm" variant="outline" onClick={() => setMembersTeam(team)}>Members</Button>
+                <Button size="sm" variant="outline" onClick={() => setEditing(team)}>Edit</Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={async () => {
+                    await patchManagedTeam(team.id, { isActive: !team.is_active, managerId: team.manager_id || null });
+                    await onReload();
+                  }}
+                >
+                  {team.is_active ? 'Deactivate' : 'Reactivate'}
+                </Button>
+              </div>
+            </div>
+          </Card>
+        ))}
+      </div>
+      {!teams.length ? <Card><div className="empty-state"><strong>No teams yet.</strong></div></Card> : null}
+      {membersTeam ? <TeamMembers team={membersTeam} staff={staff} close={async () => { setMembersTeam(null); await onReload(); }} /> : null}
+      {editing ? <EditTeam team={editing} departments={departments} staff={staff} close={() => setEditing(null)} saved={async () => { setEditing(null); await onReload(); }} /> : null}
+    </>
+  );
+}
+
+function TeamMembers({ team, staff, close }: { team: Team; staff: Staff[]; close: () => void | Promise<void> }) {
+  const [ids, setIds] = useState<string[]>([]);
+  const [lead, setLead] = useState(team.manager_id || '');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    listManagedTeamMembers(team.id).then((members) => setIds(members.map((row: { id: string }) => row.id)));
+  }, [team.id]);
+
+  return (
+    <Modal open onClose={() => void close()} title={`Manage ${team.name}`}>
+      <div className="stack">
+        <NativeSelect label="Team lead" value={lead} onChange={(event) => setLead(event.target.value)}>
+          <option value="">No team lead</option>
+          {staff.filter((member) => member.status === 'ACTIVE').map((member) => (
+            <option key={member.id} value={member.id}>{member.first_name} {member.last_name} · {member.department_name || 'No department'}</option>
+          ))}
+        </NativeSelect>
+        <div>
+          <strong>Members</strong>
+          <p className="ui-help">Teams can contain staff from different departments.</p>
+          <div className="team-member-list">
+            {staff.filter((member) => member.status === 'ACTIVE').map((member) => (
+              <label key={member.id} className="team-member-option">
+                <input
+                  type="checkbox"
+                  checked={ids.includes(member.id)}
+                  onChange={(event) => setIds((current) => event.target.checked ? [...current, member.id] : current.filter((id) => id !== member.id))}
+                />
+                <span>{member.first_name} {member.last_name}<small className="ui-help">{member.department_name || 'No department'} · {member.job_title || member.role_name}</small></span>
+              </label>
+            ))}
+          </div>
+        </div>
+        <div className="polish-actions">
+          <Button variant="outline" onClick={() => void close()}>Cancel</Button>
+          <Button loading={saving} onClick={async () => {
+            setSaving(true);
+            try {
+              await updateManagedTeamMembers(team.id, { memberIds: ids, managerId: lead || null });
+              await close();
+            } finally {
+              setSaving(false);
+            }
+          }}>Save team</Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function StructureModal({
+  mode,
+  departments,
+  staff,
+  close,
+  saved,
+}: {
+  mode: 'DEPARTMENT' | 'TEAM';
+  departments: Department[];
+  staff: Staff[];
+  close: () => void;
+  saved: () => Promise<void>;
+}) {
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [departmentId, setDepartmentId] = useState('');
+  const [managerId, setManagerId] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  return (
+    <Modal open onClose={close} title={mode === 'DEPARTMENT' ? 'New department' : 'New team'}>
+      <form className="stack" onSubmit={async (event) => {
+        event.preventDefault();
+        setSaving(true);
+        try {
+          if (mode === 'DEPARTMENT') await createManagedDepartment({ name, description });
+          else await createManagedTeam({ name, description, departmentId: departmentId || null, managerId: managerId || null });
+          await saved();
+        } finally {
+          setSaving(false);
+        }
+      }}>
+        <Input label="Name *" value={name} onChange={(event) => setName(event.target.value)} required />
+        <Textarea label="Description" value={description} onChange={(event) => setDescription(event.target.value)} rows={3} />
+        {mode === 'TEAM' ? (
+          <div className="polish-form-grid">
+            <NativeSelect label="Home department (optional)" value={departmentId} onChange={(event) => setDepartmentId(event.target.value)}>
+              <option value="">Cross-department team</option>
+              {departments.filter((department) => department.is_active).map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}
+            </NativeSelect>
+            <NativeSelect label="Team lead" value={managerId} onChange={(event) => setManagerId(event.target.value)}>
+              <option value="">Assign later</option>
+              {staff.filter((member) => member.status === 'ACTIVE').map((member) => <option key={member.id} value={member.id}>{member.first_name} {member.last_name}</option>)}
+            </NativeSelect>
+          </div>
+        ) : null}
+        <div className="polish-actions">
+          <Button type="button" variant="outline" onClick={close}>Cancel</Button>
+          <Button type="submit" loading={saving}>Create</Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function EditDepartment({ department, close, saved }: { department: Department; close: () => void; saved: () => Promise<void> }) {
+  const [name, setName] = useState(department.name);
+  const [description, setDescription] = useState(department.description || '');
+  const [saving, setSaving] = useState(false);
+  return (
+    <Modal open onClose={close} title={`Edit ${department.name}`}>
+      <form className="stack" onSubmit={async (event) => {
+        event.preventDefault();
+        setSaving(true);
+        try {
+          await patchManagedDepartment(department.id, { name, description, isActive: department.is_active });
+          await saved();
+        } finally { setSaving(false); }
+      }}>
+        <Input label="Department name *" value={name} onChange={(event) => setName(event.target.value)} required />
+        <Textarea label="Description" value={description} onChange={(event) => setDescription(event.target.value)} rows={4} />
+        <div className="polish-actions"><Button type="button" variant="outline" onClick={close}>Cancel</Button><Button type="submit" loading={saving}>Save changes</Button></div>
+      </form>
+    </Modal>
+  );
+}
+
+function EditTeam({ team, departments, staff, close, saved }: { team: Team; departments: Department[]; staff: Staff[]; close: () => void; saved: () => Promise<void> }) {
+  const [name, setName] = useState(team.name);
+  const [description, setDescription] = useState(team.description || '');
+  const [managerId, setManagerId] = useState(team.manager_id || '');
+  const [saving, setSaving] = useState(false);
+  return (
+    <Modal open onClose={close} title={`Edit ${team.name}`}>
+      <form className="stack" onSubmit={async (event) => {
+        event.preventDefault();
+        setSaving(true);
+        try {
+          await patchManagedTeam(team.id, { name, description, managerId: managerId || null, isActive: team.is_active });
+          await saved();
+        } finally { setSaving(false); }
+      }}>
+        <Input label="Team name *" value={name} onChange={(event) => setName(event.target.value)} required />
+        <Textarea label="Description" value={description} onChange={(event) => setDescription(event.target.value)} rows={4} />
+        <NativeSelect label="Team lead" value={managerId} onChange={(event) => setManagerId(event.target.value)}>
+          <option value="">No team lead</option>
+          {staff.filter((member) => member.status === 'ACTIVE').map((member) => <option key={member.id} value={member.id}>{member.first_name} {member.last_name} · {member.department_name || 'No department'}</option>)}
+        </NativeSelect>
+        {team.department_id ? <p className="ui-help">Home department: {departments.find((department) => department.id === team.department_id)?.name || team.department_name || 'Unknown'}</p> : <p className="ui-help">This is a cross-department team.</p>}
+        <div className="polish-actions"><Button type="button" variant="outline" onClick={close}>Cancel</Button><Button type="submit" loading={saving}>Save changes</Button></div>
+      </form>
+    </Modal>
+  );
+}

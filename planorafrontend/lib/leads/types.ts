@@ -11,6 +11,7 @@ export type LeadPriority = (typeof LEAD_PRIORITIES)[number];
 
 export type Lead = {
   id: string;
+  record_type: 'LEAD' | 'PROSPECT' | 'CLIENT';
   organization_id: string;
   organization_name: string;
   organization_type: string;
@@ -37,10 +38,20 @@ export type Lead = {
   next_action: string | null;
   next_follow_up_at: string | null;
   created_at: string;
-  proposed_revenue: number;
-  revenue_probability: number;
-  weighted_revenue: number;
-  actual_revenue: number | null;
+  proposed_revenue?: number;
+  revenue_probability?: number;
+  weighted_revenue?: number;
+  actual_revenue?: number | null;
+  expected_revenue: number | null;
+  available_in_pool: boolean;
+  pool_published_at: string | null;
+  pool_published_by_id: string | null;
+  pool_published_by_first_name: string | null;
+  pool_published_by_last_name: string | null;
+  claimed_at: string | null;
+  claimed_by_id: string | null;
+  claimed_by_first_name: string | null;
+  claimed_by_last_name: string | null;
   assigned_team_id: string | null;
   assigned_team_name: string | null;
   team_lead_first_name: string | null;
@@ -58,8 +69,6 @@ export type CreateOrganizationLeadInput = {
   source?: string | null;
   priority: LeadPriority;
   notes?: string | null;
-  proposedRevenue?: number | null;
-  revenueProbability?: number | null;
 };
 
 export type ApiResponse<T> = { success: true; data: T };
@@ -164,7 +173,7 @@ export type CreateActivityInput = { title:string; activityType:Activity['activit
 export type AssignmentHistory = { id:string; previous_owner_id:string|null; assigned_to_id:string|null; reason:string|null; assigned_at:string; previous_owner_first_name:string|null; previous_owner_last_name:string|null; assigned_to_first_name:string|null; assigned_to_last_name:string|null; assigned_by_first_name:string|null; assigned_by_last_name:string|null };
 export type MyWork = { metrics:{assigned_leads:number;active_pursuits:number;tasks_due_today:number;overdue_tasks:number;follow_ups_today:number;overdue_follow_ups:number};leads:Lead[] };
 export type LeadTask = {id:string;title:string;status:string;priority:string;due_at:string|null;completed_at:string|null};
-export type TaskDetail = LeadTask & {accepted_at:string|null;started_at:string|null;description:string|null;organization_id:string|null;organization_name:string|null;lead_id:string|null;lead_title:string|null;contact_id:string|null;contact_first_name:string|null;contact_last_name:string|null;assigned_to_id:string|null;assignee_first_name:string|null;assignee_last_name:string|null;creator_first_name:string|null;creator_last_name:string|null;created_at:string;task_workflow_id:string|null;task_workflow_name?:string|null;task_workflow?:null|{id:string;name:string;description:string|null;category:string|null;steps:Array<{id:string;position:number;title:string;guidance:string|null;requires_evidence:boolean;completed_at:string|null;completed_by_id:string|null;completed_by_first_name:string|null;completed_by_last_name:string|null}>};events:Array<{id:string;event_type:string;message:string|null;created_at:string;actor_first_name:string|null;actor_last_name:string|null}>;attachments:Array<{id:string;file_name:string;file_size:number|null;created_at:string}>;lead_assignment_batch:null|{id:string;title:string;instructions:string;assigned_to_id:string;assigned_by_id:string|null;priority:string;due_at:string;task_id:string|null;created_at:string;items:Array<{id:string;lead_id:string;organization_id:string;organization_name:string;stage:string;pursuit_progress:number;priority:string;previous_owner_id:string|null}>}};
+export type TaskDetail = LeadTask & {accepted_at:string|null;accepted_by_id:string|null;accepted_by_first_name?:string|null;accepted_by_last_name?:string|null;started_at:string|null;description:string|null;organization_id:string|null;organization_name:string|null;lead_id:string|null;lead_title:string|null;contact_id:string|null;contact_first_name:string|null;contact_last_name:string|null;assigned_to_id:string|null;assignee_first_name:string|null;assignee_last_name:string|null;assignee_role_id?:string|null;assignee_role_name?:string|null;assignment_type:'UNASSIGNED'|'STAFF'|'TEAM'|'DEPARTMENT';assigned_team_id:string|null;assigned_team_name?:string|null;assigned_department_id:string|null;assigned_department_name?:string|null;scheduled_for:string|null;dispatched_at:string|null;control_state:'ACTIVE'|'SCHEDULED'|'PAUSED'|'CANCELLED';paused_at:string|null;cancelled_at:string|null;creator_first_name:string|null;creator_last_name:string|null;created_at:string;task_workflow_id:string|null;task_workflow_name?:string|null;task_workflow?:null|{id:string;name:string;description:string|null;category:string|null;steps:Array<{id:string;position:number;title:string;guidance:string|null;requires_evidence:boolean;completed_at:string|null;completed_by_id:string|null;completed_by_first_name:string|null;completed_by_last_name:string|null}>};events:Array<{id:string;event_type:string;message:string|null;created_at:string;actor_first_name:string|null;actor_last_name:string|null}>;attachments:Array<{id:string;file_name:string;file_size:number|null;created_at:string}>;lead_assignment_batch:null|{id:string;title:string;instructions:string;assigned_to_id:string;assigned_by_id:string|null;priority:string;due_at:string;task_id:string|null;created_at:string;items:Array<{id:string;lead_id:string;organization_id:string;organization_name:string;stage:string;pursuit_progress:number;priority:string;previous_owner_id:string|null}>}};
 
 export type AssignmentStaff = {
   id: string;
@@ -227,8 +236,6 @@ export type LeadImportRow = {
   source?: string | null;
   priority?: LeadPriority;
   notes?: string | null;
-  proposedRevenue?: number | null;
-  revenueProbability?: number | null;
 };
 export type LeadImportPreviewRow = LeadImportRow & {
   status: 'READY' | 'EXISTING_ORGANIZATION' | 'EXISTING_LEAD' | 'DUPLICATE_FILE';

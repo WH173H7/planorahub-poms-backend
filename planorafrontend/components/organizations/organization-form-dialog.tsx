@@ -81,7 +81,7 @@ function OrganizationFormContent({
 
   return (
     <form onSubmit={submit} className="stack" style={{ marginTop: 18 }}>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+      <div className="polish-form-grid">
         <Input label="Organization name *" value={form.name} onChange={(event) => set('name', event.target.value)} required />
         <Input label="Legal name" value={form.legalName} onChange={(event) => set('legalName', event.target.value)} />
         <Input label="Industry" value={form.industry} onChange={(event) => set('industry', event.target.value)} />

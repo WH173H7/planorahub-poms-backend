@@ -6,14 +6,8 @@ BEGIN;
 
 INSERT INTO roles (code, name, description, is_system_role)
 VALUES
-  ('SUPER_ADMIN', 'Super Admin', 'Full access to all POMS modules and administration.', TRUE),
-  ('OPERATIONS_MANAGER', 'Operations Manager', 'Manages operational work, teams, tasks and related reporting.', TRUE),
-  ('SALES_MANAGER', 'Sales Manager', 'Manages sales staff, leads, pipeline and sales analytics.', TRUE),
-  ('SALES_EXECUTIVE', 'Sales Executive', 'Works assigned leads, activities, tasks and personal sales performance.', TRUE),
-  ('CUSTOMER_SUCCESS', 'Customer Success Officer', 'Manages assigned customers, follow-ups and customer success activities.', TRUE),
-  ('MARKETING', 'Marketing Officer', 'Handles marketing-related leads, activities and marketing performance.', TRUE),
-  ('FINANCE', 'Finance Officer', 'Handles finance and revenue-related records.', TRUE),
-  ('GENERAL_STAFF', 'General Staff', 'Default staff role for task-focused operational access.', TRUE)
+  ('SUPER_ADMIN', 'Super Admin', 'Protected platform administrator with full access.', TRUE),
+  ('MARKETING', 'Marketing', 'Built-in marketing staff role. Additional staff roles are created by the Super Admin.', TRUE)
 ON CONFLICT (code) DO NOTHING;
 
 

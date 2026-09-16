@@ -32,7 +32,7 @@ export default function LoginPage() {
 
       try {
         const user = await getCurrentCrmUser();
-        if (active) window.location.replace(routeForUser(user));
+        if (active) window.location.replace(user.must_change_password ? '/change-password' : routeForUser(user));
       } catch {
         if (active) setCheckingSession(false);
       }
@@ -66,7 +66,7 @@ export default function LoginPage() {
 
     try {
       const user = await getCurrentCrmUser();
-      window.location.assign(routeForUser(user));
+      window.location.assign(user.must_change_password ? '/change-password' : routeForUser(user));
     } catch (caught) {
       setError(
         caught instanceof Error

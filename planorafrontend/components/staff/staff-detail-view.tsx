@@ -18,6 +18,7 @@ import {
   setStaffStatus,
   updateStaff,
   type Department,
+  type MailDelivery,
   type Role,
 } from '@/lib/staff/api';
 
@@ -39,6 +40,8 @@ export function StaffDetailView({ staffId }: { staffId: string }) {
   const [password, setPassword] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  const [resetOpen, setResetOpen] = useState(false);
+  const [passwordDelivery, setPasswordDelivery] = useState<MailDelivery | null>(null);
   const [roles, setRoles] = useState<Role[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [teams, setTeams] = useState<Array<{ id: string; name: string; department_id: string }>>([]);
@@ -86,18 +89,6 @@ export function StaffDetailView({ staffId }: { staffId: string }) {
     }
   }
 
-  async function issueTemporaryPassword() {
-    setBusy(true);
-    setMessage(null);
-    try {
-      const result = await resetStaffPassword(staffId);
-      setPassword(result.temporaryPassword);
-      setMessage('A new temporary password has been issued. The previous password no longer works.');
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function copyPassword() {
     if (!password) return;
     await navigator.clipboard.writeText(password);
@@ -139,10 +130,10 @@ export function StaffDetailView({ staffId }: { staffId: string }) {
           <div className="ui-card-content">
             <span className="eyebrow">Account controls</span>
             <h2>Access & security</h2>
-            <p className="ui-help">New accounts use a temporary password. The first successful login automatically changes an Invited account to Active. Suspending or disabling preserves all CRM history.</p>
+            <p className="ui-help">New accounts use a temporary password and remain Invited until the staff member creates a new password. Admin resets can optionally email the new temporary password. Suspending or disabling preserves all CRM history.</p>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-              <Button variant="outline" loading={busy} onClick={() => void issueTemporaryPassword()}>
-                {item.status === 'INVITED' ? 'Issue temporary password' : 'Reset password'}
+              <Button variant="outline" disabled={busy} onClick={() => setResetOpen(true)}>
+                {item.status === 'INVITED' ? 'Issue new temporary password' : 'Reset password'}
               </Button>
               {item.status === 'ACTIVE' ? (
                 <>
@@ -161,7 +152,8 @@ export function StaffDetailView({ staffId }: { staffId: string }) {
                   <code>{password}</code>
                   <Button size="sm" variant="outline" onClick={() => void copyPassword()}>Copy</Button>
                 </div>
-                <small>Share this securely with the staff member. It is not their email password.</small>
+                <small>This value is shown only for this admin session. The staff member must change it before accessing CRM data.</small>
+                {passwordDelivery ? <small className={`credential-delivery credential-delivery--${passwordDelivery.status.toLowerCase()}`}>{passwordDelivery.message}</small> : null}
               </div>
             ) : null}
             {message ? <p className="ui-help">{message}</p> : null}
@@ -182,6 +174,22 @@ export function StaffDetailView({ staffId }: { staffId: string }) {
         </Card>
       </div>
 
+      {resetOpen ? (
+        <ResetPasswordDialog
+          staffName={name}
+          staffEmail={item.email}
+          onClose={() => setResetOpen(false)}
+          onReset={async (sendEmail) => {
+            const result = await resetStaffPassword(staffId, { sendEmail });
+            setPassword(result.temporaryPassword);
+            setPasswordDelivery(result.emailDelivery);
+            setResetOpen(false);
+            setMessage('A new temporary password has been issued. The previous password no longer works.');
+            await load();
+          }}
+        />
+      ) : null}
+
       {editOpen ? (
         <EditStaffDialog
           item={item}
@@ -197,6 +205,55 @@ export function StaffDetailView({ staffId }: { staffId: string }) {
         />
       ) : null}
     </AppShell>
+  );
+}
+
+function ResetPasswordDialog({
+  staffName,
+  staffEmail,
+  onClose,
+  onReset,
+}: {
+  staffName: string;
+  staffEmail: string;
+  onClose: () => void;
+  onReset: (sendEmail: boolean) => Promise<void>;
+}) {
+  const [sendEmail, setSendEmail] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  return (
+    <Modal open onClose={onClose} title="Reset staff password">
+      <div className="stack reset-password-dialog">
+        <div>
+          <strong>Issue a new temporary password for {staffName}?</strong>
+          <p className="ui-help">Their current password will stop working immediately. They must create a new password before they can access the CRM again.</p>
+        </div>
+        <label className="reset-email-choice">
+          <input type="checkbox" checked={sendEmail} onChange={(event) => setSendEmail(event.target.checked)} />
+          <span><strong>Email the temporary password to staff</strong><small>{staffEmail}</small></span>
+        </label>
+        <p className="ui-help">The temporary password will always be shown once to the administrator after the reset, whether or not email is selected.</p>
+        {error ? <p className="task-form-error">{error}</p> : null}
+        <div className="polish-actions">
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button
+            loading={saving}
+            onClick={async () => {
+              setSaving(true);
+              setError(null);
+              try {
+                await onReset(sendEmail);
+              } catch (caught) {
+                setError(caught instanceof Error ? caught.message : 'Unable to reset password.');
+                setSaving(false);
+              }
+            }}
+          >Reset password</Button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -268,7 +325,7 @@ function EditStaffDialog({
           <Input label="Phone" value={form.phone} onChange={(event) => set('phone', event.target.value)} />
           <Input label="Job title" value={form.jobTitle} onChange={(event) => set('jobTitle', event.target.value)} />
           <NativeSelect label="Role *" value={form.roleId} onChange={(event) => set('roleId', event.target.value)} required>
-            {roles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}
+            {roles.filter((role) => role.id === item.role_id || (role.code !== 'SUPER_ADMIN' && role.is_active !== false)).map((role) => <option key={role.id} value={role.id}>{role.name}{role.is_active === false ? ' (archived)' : ''}</option>)}
           </NativeSelect>
           <NativeSelect
             label="Department"

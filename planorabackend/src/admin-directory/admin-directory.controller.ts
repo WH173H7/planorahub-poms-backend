@@ -35,6 +35,40 @@ export class AdminDirectoryController {
     };
   }
 
+  @Post('roles')
+  @RequirePermission('roles.manage')
+  async createRole(
+    @Body()
+    body: {
+      name: string;
+      description?: string;
+      permissionIds?: string[];
+    },
+  ) {
+    return {
+      success: true,
+      data: await this.directory.createRole(body),
+    };
+  }
+
+  @Patch('roles/:id')
+  @RequirePermission('roles.manage')
+  async updateRole(
+    @Param('id') id: string,
+    @Body()
+    body: {
+      name?: string;
+      description?: string;
+      permissionIds?: string[];
+      isActive?: boolean;
+    },
+  ) {
+    return {
+      success: true,
+      data: await this.directory.updateRole(id, body),
+    };
+  }
+
   @Get('permissions')
   @RequirePermission('users.create')
   async permissions() {

@@ -10,6 +10,8 @@ import { SupabaseService } from '../supabase/supabase.service.js';
 
 import {
   type TaskAttachmentRow,
+  type TaskAssignmentType,
+  type TaskControlState,
   type TaskEventType,
   type TaskInput,
   type TaskPriority,
@@ -98,13 +100,13 @@ export class TasksService {
     const keys=Object.keys(body).filter((key)=>body[key as keyof TaskInput]!==undefined);
     if(keys.some((key)=>key!=='status')) throw new BadRequestException('Assigned staff cannot change the task brief, assignee, priority or deadline. Ask an Admin to update the task.');
     if(body.status && !['TODO','IN_PROGRESS','BLOCKED'].includes(body.status)) throw new BadRequestException('Use Accept, Start and Submit for Review to progress this task.');
-    return this.update(id,{status:body.status,assignedToId:userId},context);
+    return this.update(id,{status:body.status},context);
   }
 
   async createOwnedForLead(leadId:string,body:Partial<TaskInput>,userId:string,context?:ActionContext){
     const lead=await this.tasks.ownedLeadContext(leadId,userId);
     if(!lead)throw new NotFoundException('Lead not found');
-    return this.create({...body,leadId,organizationId:lead.organization_id,assignedToId:userId},context);
+    return this.create({...body,leadId,organizationId:lead.organization_id,assignedToId:userId,assignmentType:'STAFF'},context);
   }
 
   async get(
@@ -159,18 +161,25 @@ export class TasksService {
         newValues: task,
       });
 
-      if (task.assigned_to_id) {
+      if (task.assignment_type !== 'UNASSIGNED') {
         await this.tasks.addEvent({
           taskId: task.id,
-          actorUserId:
-            context?.actorUserId,
+          actorUserId: context?.actorUserId,
           eventType: 'TASK_ASSIGNED',
-          message: 'Task assigned — awaiting acceptance',
+          message: task.control_state === 'SCHEDULED'
+            ? `Task scheduled for ${task.scheduled_for}`
+            : 'Task assigned — awaiting acceptance',
           newValues: {
-            assignedToId:
-              task.assigned_to_id,
+            assignmentType: task.assignment_type,
+            assignedToId: task.assigned_to_id,
+            assignedTeamId: task.assigned_team_id,
+            assignedDepartmentId: task.assigned_department_id,
+            scheduledFor: task.scheduled_for,
           },
         });
+      }
+      if (task.assignment_type !== 'UNASSIGNED' && task.control_state === 'ACTIVE') {
+        await this.tasks.notifyRecipients(task,'New task assigned',task.title);
       }
     } catch (error) {
       await this.tasks.deleteTask(task.id);
@@ -253,6 +262,26 @@ export class TasksService {
           body.taskWorkflowId === undefined
             ? current.task_workflow_id
             : body.taskWorkflowId,
+        assignmentType:
+          body.assignmentType === undefined
+            ? current.assignment_type
+            : body.assignmentType,
+        assignedTeamId:
+          body.assignedTeamId === undefined
+            ? current.assigned_team_id
+            : body.assignedTeamId,
+        assignedDepartmentId:
+          body.assignedDepartmentId === undefined
+            ? current.assigned_department_id
+            : body.assignedDepartmentId,
+        scheduledFor:
+          body.scheduledFor === undefined
+            ? current.scheduled_for
+            : body.scheduledFor,
+        controlState:
+          body.controlState === undefined
+            ? current.control_state
+            : body.controlState,
       });
 
     const updated =
@@ -393,11 +422,16 @@ export class TasksService {
       throw new BadRequestException('Authenticated staff member is required');
     }
 
-    if (current.assigned_to_id !== actorUserId) {
-      throw new BadRequestException('Only the assigned staff member can accept this task');
+    if (!(await this.tasks.canUserWorkOnTask(id, actorUserId))) {
+      throw new BadRequestException('This task is not currently assigned to you, your Team or your Department');
     }
-
-    if (current.accepted_at) {
+    if (current.control_state !== 'ACTIVE') {
+      throw new BadRequestException('This task is not active');
+    }
+    if (current.accepted_by_id && current.accepted_by_id !== actorUserId) {
+      throw new BadRequestException('Another eligible staff member has already accepted this shared task');
+    }
+    if (current.accepted_at && current.accepted_by_id === actorUserId) {
       return this.get(id);
     }
 
@@ -441,8 +475,14 @@ export class TasksService {
       throw new BadRequestException('Authenticated staff member is required');
     }
 
-    if (current.assigned_to_id !== actorUserId) {
-      throw new BadRequestException('Only the assigned staff member can start this task');
+    if (!(await this.tasks.canUserWorkOnTask(id, actorUserId))) {
+      throw new BadRequestException('This task is not currently assigned to you, your Team or your Department');
+    }
+    if (current.accepted_by_id && current.accepted_by_id !== actorUserId) {
+      throw new BadRequestException('Another eligible staff member has already accepted this shared task');
+    }
+    if (current.control_state !== 'ACTIVE') {
+      throw new BadRequestException('This task is not active');
     }
 
     if (current.status === 'COMPLETED' || current.status === 'CANCELLED') {
@@ -492,12 +532,14 @@ export class TasksService {
   async submitForReview(id:string,context?:ActionContext){
     const current=await this.ensureTask(id);
     const actor=context?.actorUserId;
-    if(!actor||current.assigned_to_id!==actor) throw new BadRequestException('Only the assigned staff member can submit this task');
-    if(!current.accepted_at) throw new BadRequestException('Accept the task before submitting work');
+    if(!actor||!(await this.tasks.canUserWorkOnTask(id,actor))) throw new BadRequestException('This task is not assigned to you, your Team or your Department');
+    if(!current.accepted_at||current.accepted_by_id!==actor) throw new BadRequestException('Accept the task before submitting work');
+    if(current.control_state!=='ACTIVE') throw new BadRequestException('This task is not active');
     if(current.status==='COMPLETED'||current.status==='CANCELLED') throw new BadRequestException('This task cannot be submitted');
-    const updated=await this.tasks.update(id,{title:current.title,description:current.description,organizationId:current.organization_id,leadId:current.lead_id,contactId:current.contact_id,assignedToId:current.assigned_to_id,status:'AWAITING_RESPONSE',priority:current.priority,startAt:current.start_at,dueAt:current.due_at,taskWorkflowId:current.task_workflow_id});
+    const updated=await this.tasks.update(id,{title:current.title,description:current.description,organizationId:current.organization_id,leadId:current.lead_id,contactId:current.contact_id,assignedToId:current.assigned_to_id,status:'AWAITING_RESPONSE',priority:current.priority,startAt:current.start_at,dueAt:current.due_at,taskWorkflowId:current.task_workflow_id,assignmentType:current.assignment_type,assignedTeamId:current.assigned_team_id,assignedDepartmentId:current.assigned_department_id,scheduledFor:current.scheduled_for,controlState:current.control_state});
     if(!updated) throw new NotFoundException('Task not found');
     await this.tasks.addEvent({taskId:id,actorUserId:actor,eventType:'STATUS_CHANGED',message:'Work submitted for admin review',oldValues:{status:current.status},newValues:{status:'AWAITING_RESPONSE'}});
+    await this.tasks.notifyAdmins('Task submitted for review',current.title,id);
     await this.audit.log({actorUserId:actor,action:'TASK_SUBMITTED_FOR_REVIEW',module:'tasks',entityType:'task',entityId:id,oldValues:{status:current.status},newValues:{status:'AWAITING_RESPONSE'},ipAddress:context?.ipAddress,userAgent:context?.userAgent});
     return this.get(id);
   }
@@ -506,13 +548,31 @@ export class TasksService {
     const current=await this.ensureTask(id);
     if(current.status!=='AWAITING_RESPONSE') throw new BadRequestException('Only submitted tasks can be reviewed');
     const status:TaskStatus=decision==='APPROVE'?'COMPLETED':'BLOCKED';
-    const updated=await this.tasks.update(id,{title:current.title,description:current.description,organizationId:current.organization_id,leadId:current.lead_id,contactId:current.contact_id,assignedToId:current.assigned_to_id,status,priority:current.priority,startAt:current.start_at,dueAt:current.due_at,taskWorkflowId:current.task_workflow_id});
+    const updated=await this.tasks.update(id,{title:current.title,description:current.description,organizationId:current.organization_id,leadId:current.lead_id,contactId:current.contact_id,assignedToId:current.assigned_to_id,status,priority:current.priority,startAt:current.start_at,dueAt:current.due_at,taskWorkflowId:current.task_workflow_id,assignmentType:current.assignment_type,assignedTeamId:current.assigned_team_id,assignedDepartmentId:current.assigned_department_id,scheduledFor:current.scheduled_for,controlState:current.control_state});
     if(!updated) throw new NotFoundException('Task not found');
     const clean=message?.trim();
     await this.tasks.addEvent({taskId:id,actorUserId:context?.actorUserId,eventType:decision==='APPROVE'?'TASK_COMPLETED':'STATUS_CHANGED',message:decision==='APPROVE'?(clean||'Task approved and completed'):(clean?`Revision requested: ${clean}`:'Revision requested'),oldValues:{status:current.status},newValues:{status}});
+    await this.tasks.notifyRecipients(updated,decision==='APPROVE'?'Task approved':'Task revision requested',clean||updated.title);
     await this.audit.log({actorUserId:context?.actorUserId,action:decision==='APPROVE'?'TASK_APPROVED':'TASK_REVISION_REQUESTED',module:'tasks',entityType:'task',entityId:id,oldValues:{status:current.status},newValues:{status,message:clean??null},ipAddress:context?.ipAddress,userAgent:context?.userAgent});
     return this.get(id);
   }
+  async controlTask(id:string,action:'PAUSE'|'RESUME'|'CANCEL'|'COMPLETE'|'REOPEN'|'DISPATCH_NOW',context?:ActionContext){
+    const current=await this.ensureTask(id);
+    const allowed:Record<string,string[]>={
+      PAUSE:['ACTIVE'],RESUME:['PAUSED'],CANCEL:['ACTIVE','PAUSED','SCHEDULED'],COMPLETE:['ACTIVE','PAUSED'],REOPEN:['ACTIVE','CANCELLED'],DISPATCH_NOW:['SCHEDULED'],
+    };
+    if(!allowed[action]?.includes(current.control_state)){
+      if(action==='REOPEN'&&current.status==='COMPLETED'){}else throw new BadRequestException(`Task cannot be ${action.toLowerCase().replaceAll('_',' ')} from its current state`);
+    }
+    const updated=await this.tasks.control(id,action);
+    if(!updated)throw new NotFoundException('Task not found');
+    const labels:Record<string,string>={PAUSE:'Task paused by Admin',RESUME:'Task resumed by Admin',CANCEL:'Task cancelled by Admin',COMPLETE:'Task marked completed by Admin',REOPEN:'Task reopened by Admin',DISPATCH_NOW:'Scheduled task dispatched now'};
+    await this.tasks.addEvent({taskId:id,actorUserId:context?.actorUserId,eventType:action==='COMPLETE'?'TASK_COMPLETED':action==='REOPEN'?'TASK_REOPENED':'STATUS_CHANGED',message:labels[action],oldValues:{status:current.status,controlState:current.control_state},newValues:{status:updated.status,controlState:updated.control_state}});
+    await this.tasks.notifyRecipients(updated,labels[action],updated.title);
+    await this.audit.log({actorUserId:context?.actorUserId,action:`TASK_${action}`,module:'tasks',entityType:'task',entityId:id,oldValues:{status:current.status,controlState:current.control_state},newValues:{status:updated.status,controlState:updated.control_state},ipAddress:context?.ipAddress,userAgent:context?.userAgent});
+    return this.get(id);
+  }
+
   async deleteTask(
     id: string,
     context?: ActionContext,
@@ -859,10 +919,15 @@ export class TasksService {
     };
   }
 
-  async toggleWorkflowStep(taskId:string,stepId:string,completed:boolean,context?:ActionContext){
+  async toggleWorkflowStep(taskId:string,stepId:string,completed:boolean,context?:ActionContext,requireAccountableWorker=false){
     const task=await this.ensureTask(taskId);
     if(!task.task_workflow_id) throw new BadRequestException('This task does not use a workflow guide');
     if(!context?.actorUserId) throw new BadRequestException('Authenticated user is required');
+    if(task.control_state!=='ACTIVE')throw new BadRequestException('Workflow steps can only be updated while the task is active');
+    if(requireAccountableWorker){
+      if(!(await this.tasks.canUserWorkOnTask(taskId,context.actorUserId)))throw new BadRequestException('This task is not assigned to you, your Team or your Department');
+      if(task.accepted_by_id&&task.accepted_by_id!==context.actorUserId)throw new BadRequestException('Another staff member is accountable for this shared task');
+    }
     const ok=await this.tasks.toggleWorkflowStep(taskId,stepId,context.actorUserId,completed);
     if(!ok) throw new BadRequestException('Workflow step does not belong to this task');
     await this.audit.log({actorUserId:context.actorUserId,action:completed?'TASK_WORKFLOW_STEP_COMPLETED':'TASK_WORKFLOW_STEP_REOPENED',module:'tasks',entityType:'task',entityId:taskId,newValues:{stepId,completed},ipAddress:context.ipAddress,userAgent:context.userAgent});
@@ -901,176 +966,82 @@ export class TasksService {
     );
   }
 
-  private async validate(
-    body: Partial<TaskInput>,
-  ): Promise<TaskInput> {
-    const title =
-      body.title?.trim();
+  private async validate(body:Partial<TaskInput>):Promise<TaskInput>{
+    const title=body.title?.trim();
+    if(!title)throw new BadRequestException('Task title is required');
+    const status=(body.status??'TODO') as TaskStatus;
+    const priority=(body.priority??'MEDIUM') as TaskPriority;
+    const statuses:TaskStatus[]=['TODO','IN_PROGRESS','AWAITING_RESPONSE','BLOCKED','COMPLETED','CANCELLED'];
+    const priorities:TaskPriority[]=['LOW','MEDIUM','HIGH','URGENT'];
+    if(!statuses.includes(status))throw new BadRequestException('Invalid task status');
+    if(!priorities.includes(priority))throw new BadRequestException('Invalid task priority');
 
-    if (!title) {
-      throw new BadRequestException(
-        'Task title is required',
-      );
+    const organizationId=this.clean(body.organizationId);
+    const leadId=this.clean(body.leadId);
+    const contactId=this.clean(body.contactId);
+    const assignedToId=this.clean(body.assignedToId);
+    const assignedTeamId=this.clean(body.assignedTeamId);
+    const assignedDepartmentId=this.clean(body.assignedDepartmentId);
+    const taskWorkflowId=this.clean(body.taskWorkflowId);
+    const assignmentType=(body.assignmentType??(assignedToId?'STAFF':assignedTeamId?'TEAM':assignedDepartmentId?'DEPARTMENT':'UNASSIGNED')) as TaskAssignmentType;
+    if(!['UNASSIGNED','STAFF','TEAM','DEPARTMENT'].includes(assignmentType))throw new BadRequestException('Invalid assignment type');
+
+    if(organizationId&&!(await this.tasks.entityExists('organizations',organizationId)))throw new BadRequestException('Invalid organization');
+    if(leadId&&!(await this.tasks.entityExists('leads',leadId)))throw new BadRequestException('Invalid lead');
+    if(contactId&&!(await this.tasks.entityExists('contacts',contactId)))throw new BadRequestException('Invalid contact');
+    if(assignedToId&&!(await this.tasks.entityExists('users',assignedToId)))throw new BadRequestException('Invalid assignee');
+    if(assignedTeamId&&!(await this.tasks.entityExists('teams' as any,assignedTeamId)))throw new BadRequestException('Invalid team');
+    if(assignedDepartmentId&&!(await this.tasks.entityExists('departments' as any,assignedDepartmentId)))throw new BadRequestException('Invalid department');
+    if(taskWorkflowId&&!(await this.tasks.entityExists('task_workflows',taskWorkflowId)))throw new BadRequestException('Invalid task workflow');
+
+    if(assignmentType==='STAFF'&&!assignedToId)throw new BadRequestException('Choose the staff member who should receive this task');
+    if(assignmentType==='TEAM'&&!assignedTeamId)throw new BadRequestException('Choose the Team that should receive this task');
+    if(assignmentType==='DEPARTMENT'&&!assignedDepartmentId)throw new BadRequestException('Choose the Department that should receive this task');
+    if(assignmentType==='UNASSIGNED'&&(assignedToId||assignedTeamId||assignedDepartmentId))throw new BadRequestException('Unassigned tasks cannot include an assignment target');
+
+    if(leadId&&organizationId&&!(await this.tasks.leadBelongsToOrganization(leadId,organizationId)))throw new BadRequestException('Lead must belong to the selected organization');
+    if(contactId&&organizationId&&!(await this.tasks.contactBelongsToOrganization(contactId,organizationId)))throw new BadRequestException('Contact must belong to the selected organization');
+
+    if(taskWorkflowId){
+      const workflow=await this.tasks.workflowMeta(taskWorkflowId);
+      if(!workflow||!workflow.is_active)throw new BadRequestException('Selected task workflow is not active');
+      if(workflow.scope_type==='ROLE'){
+        if(assignmentType!=='STAFF'||!assignedToId)throw new BadRequestException('This workflow is reserved for a staff role');
+        const meta=await this.tasks.assignmentMeta(assignedToId);
+        if(!meta||meta.role_id!==workflow.role_id)throw new BadRequestException('The selected workflow does not match this staff member’s role');
+      }
+      if(workflow.scope_type==='TEAM'&&(assignmentType!=='TEAM'||workflow.team_id!==assignedTeamId))throw new BadRequestException('The selected workflow does not match the selected Team');
+      if(workflow.scope_type==='DEPARTMENT'&&(assignmentType!=='DEPARTMENT'||workflow.department_id!==assignedDepartmentId))throw new BadRequestException('The selected workflow does not match the selected Department');
     }
 
-    const status =
-      (body.status ??
-        'TODO') as TaskStatus;
-
-    const priority =
-      (body.priority ??
-        'MEDIUM') as TaskPriority;
-
-    const statuses: TaskStatus[] = [
-      'TODO',
-      'IN_PROGRESS',
-      'AWAITING_RESPONSE',
-      'BLOCKED',
-      'COMPLETED',
-      'CANCELLED',
-    ];
-
-    const priorities: TaskPriority[] = [
-      'LOW',
-      'MEDIUM',
-      'HIGH',
-      'URGENT',
-    ];
-
-    if (!statuses.includes(status)) {
-      throw new BadRequestException(
-        'Invalid task status',
-      );
+    const scheduledFor=this.clean(body.scheduledFor);
+    const dueAt=this.clean(body.dueAt);
+    if(dueAt&&Number.isNaN(new Date(dueAt).getTime()))throw new BadRequestException('Invalid due date');
+    let controlState=(body.controlState??(scheduledFor&&new Date(scheduledFor).getTime()>Date.now()?'SCHEDULED':'ACTIVE')) as TaskControlState;
+    if(!['ACTIVE','SCHEDULED','PAUSED','CANCELLED'].includes(controlState))throw new BadRequestException('Invalid task control state');
+    if(scheduledFor){
+      const ms=new Date(scheduledFor).getTime();
+      if(Number.isNaN(ms))throw new BadRequestException('Invalid scheduled dispatch time');
+      if(assignmentType==='UNASSIGNED')throw new BadRequestException('A scheduled task must be assigned to Staff, a Team or a Department');
+      if(ms>Date.now())controlState='SCHEDULED';
+      else if(controlState==='SCHEDULED')controlState='ACTIVE';
+      if(dueAt){
+        const dueMs=new Date(dueAt).getTime();
+        if(Number.isNaN(dueMs))throw new BadRequestException('Invalid due date');
+        if(dueMs<=ms)throw new BadRequestException('Due date must be after the scheduled dispatch time');
+      }
     }
 
-    if (
-      !priorities.includes(priority)
-    ) {
-      throw new BadRequestException(
-        'Invalid task priority',
-      );
-    }
-
-    const organizationId =
-      this.clean(
-        body.organizationId,
-      );
-    const leadId =
-      this.clean(body.leadId);
-    const contactId =
-      this.clean(body.contactId);
-    const assignedToId =
-      this.clean(
-        body.assignedToId,
-      );
-    const taskWorkflowId =
-      this.clean(body.taskWorkflowId);
-
-    if (
-      organizationId &&
-      !(await this.tasks.entityExists(
-        'organizations',
-        organizationId,
-      ))
-    ) {
-      throw new BadRequestException(
-        'Invalid organization',
-      );
-    }
-
-    if (
-      leadId &&
-      !(await this.tasks.entityExists(
-        'leads',
-        leadId,
-      ))
-    ) {
-      throw new BadRequestException(
-        'Invalid lead',
-      );
-    }
-
-    if (
-      contactId &&
-      !(await this.tasks.entityExists(
-        'contacts',
-        contactId,
-      ))
-    ) {
-      throw new BadRequestException(
-        'Invalid contact',
-      );
-    }
-
-    if (
-      assignedToId &&
-      !(await this.tasks.entityExists(
-        'users',
-        assignedToId,
-      ))
-    ) {
-      throw new BadRequestException(
-        'Invalid assignee',
-      );
-    }
-
-    if (
-      taskWorkflowId &&
-      !(await this.tasks.entityExists(
-        'task_workflows',
-        taskWorkflowId,
-      ))
-    ) {
-      throw new BadRequestException(
-        'Invalid task workflow',
-      );
-    }
-
-    if (
-      leadId &&
-      organizationId &&
-      !(await this.tasks
-        .leadBelongsToOrganization(
-          leadId,
-          organizationId,
-        ))
-    ) {
-      throw new BadRequestException(
-        'Lead must belong to the selected organization',
-      );
-    }
-
-    if (
-      contactId &&
-      organizationId &&
-      !(await this.tasks
-        .contactBelongsToOrganization(
-          contactId,
-          organizationId,
-        ))
-    ) {
-      throw new BadRequestException(
-        'Contact must belong to the selected organization',
-      );
-    }
-
-    return {
+    return{
       title,
-      description:
-        this.clean(
-          body.description,
-        ),
-      organizationId,
-      leadId,
-      contactId,
-      assignedToId,
-      status,
-      priority,
-      startAt:
-        this.clean(body.startAt),
-      dueAt:
-        this.clean(body.dueAt),
-      taskWorkflowId,
+      description:this.clean(body.description),
+      organizationId,leadId,contactId,
+      assignedToId:assignmentType==='STAFF'?assignedToId:null,
+      assignedTeamId:assignmentType==='TEAM'?assignedTeamId:null,
+      assignedDepartmentId:assignmentType==='DEPARTMENT'?assignedDepartmentId:null,
+      assignmentType,status,priority,
+      startAt:this.clean(body.startAt),dueAt,taskWorkflowId,
+      scheduledFor,controlState,
     };
   }
 

@@ -1,3 +1,86 @@
-'use client';import Link from 'next/link';import {useEffect,useState} from 'react';import {AppShell} from '@/components/shell/app-shell';import {Badge} from '@/components/ui/badge';import {Card} from '@/components/ui/card';import {Skeleton} from '@/components/ui/skeleton';import {getStaffHome,type StaffHome} from '@/lib/delivery/api';
-const fmt=(x:string)=>new Intl.DateTimeFormat(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}).format(new Date(x));const pretty=(x:string)=>x.replaceAll('_',' ').toLowerCase().replace(/\b\w/g,c=>c.toUpperCase());
-export function StaffHomeView(){const[d,setD]=useState<StaffHome|null>(null),[e,setE]=useState<string|null>(null);useEffect(()=>{let a=true;getStaffHome().then(x=>a&&setD(x)).catch(x=>a&&setE(x instanceof Error?x.message:'Unable to load My Day.'));return()=>{a=false}},[]);if(e)return <AppShell area="staff" title="My Day" breadcrumb="Home"><Card><div className="ui-card-content">{e}</div></Card></AppShell>;if(!d)return <AppShell area="staff" title="My Day" breadcrumb="Home"><Skeleton height={480}/></AppShell>;return <AppShell area="staff" title="My Day" breadcrumb="Home" personalize="greeting" description="Your assigned work, deadlines and customer follow-ups in one place."><div className="page-stack"><div className="lead-summary">{[['Open Tasks',d.summary.open_tasks],['Overdue',d.summary.overdue_tasks],['Assigned Leads',d.summary.assigned_leads],['Follow-ups Today',d.summary.followups_today]].map(([l,v])=><Card key={String(l)}><div className="ui-card-content"><div className="ui-help">{l}</div><h2 style={{margin:'6px 0 0'}}>{v}</h2></div></Card>)}</div><div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}><Card><div className="ui-card-content"><h2 style={{marginTop:0}}>My Tasks</h2>{d.tasks.length?d.tasks.map(t=><Link key={t.id} href={`/tasks/${t.id}`} style={{display:'flex',justifyContent:'space-between',gap:12,padding:'12px 0',borderBottom:'1px solid #eee',textDecoration:'none',color:'inherit'}}><div><strong>{t.title}</strong><div className="ui-help">{pretty(t.status)} · {t.due_at?fmt(t.due_at):'No deadline'}</div></div><Badge tone={t.priority==='HIGH'||t.priority==='URGENT'?'warning':'neutral'}>{t.priority}</Badge></Link>):<p className="ui-help">No open tasks.</p>}<p><Link href="/tasks" style={{color:'#6F2C7F',fontWeight:700}}>View all tasks →</Link></p></div></Card><Card><div className="ui-card-content"><h2 style={{marginTop:0}}>My Leads</h2>{d.leads.length?d.leads.map(l=><Link key={l.id} href={`/my-work/leads/${l.id}`} style={{display:'block',padding:'12px 0',borderBottom:'1px solid #eee',textDecoration:'none',color:'inherit'}}><strong>{l.organization_name}</strong><div className="ui-help">{pretty(l.stage)} · {l.pursuit_progress}% pursuit · {l.priority}</div></Link>):<p className="ui-help">No Leads assigned to you.</p>}<p><Link href="/my-work" style={{color:'#6F2C7F',fontWeight:700}}>Open My Leads →</Link></p></div></Card></div><Card><div className="ui-card-content"><h2 style={{marginTop:0}}>Upcoming Follow-ups</h2>{d.followups.length?d.followups.map(f=><div key={f.id} style={{padding:'10px 0',borderBottom:'1px solid #eee'}}><strong>{f.title}</strong><div className="ui-help">{f.organization_name||'General'} · {fmt(f.scheduled_at)}</div></div>):<p className="ui-help">No upcoming follow-ups.</p>}</div></Card></div></AppShell>}
+'use client';
+
+import Link from 'next/link';
+import { useEffect, useState } from 'react';
+import { AppShell } from '@/components/shell/app-shell';
+import { Badge } from '@/components/ui/badge';
+import { Card } from '@/components/ui/card';
+import { Skeleton } from '@/components/ui/skeleton';
+import { getStaffHome, type StaffHome } from '@/lib/delivery/api';
+
+const fmt = (value: string) =>
+  new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(value));
+const pretty = (value: string) => value.replaceAll('_', ' ').toLowerCase().replace(/\b\w/g, (character) => character.toUpperCase());
+
+export function StaffHomeView() {
+  const [data, setData] = useState<StaffHome | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    getStaffHome()
+      .then((response) => active && setData(response))
+      .catch((caught) => active && setError(caught instanceof Error ? caught.message : 'Unable to load My Day.'));
+    return () => { active = false; };
+  }, []);
+
+  if (error) return <AppShell area="staff" title="My Day" breadcrumb="Home"><Card><div className="ui-card-content">{error}</div></Card></AppShell>;
+  if (!data) return <AppShell area="staff" title="My Day" breadcrumb="Home"><Skeleton height={480} /></AppShell>;
+
+  const metrics = [
+    ['Open Tasks', data.summary.open_tasks],
+    ['Overdue', data.summary.overdue_tasks],
+    ['Assigned Leads', data.summary.assigned_leads],
+    ['Follow-ups Today', data.summary.followups_today],
+  ] as const;
+
+  return (
+    <AppShell area="staff" title="My Day" breadcrumb="Home" personalize="greeting" description="Your assigned work, deadlines and customer follow-ups in one place.">
+      <div className="page-stack staff-home-page">
+        <div className="staff-home-kpis">
+          {metrics.map(([label, value]) => (
+            <Card key={label}><div className="staff-home-kpi"><span>{label}</span><strong>{value}</strong></div></Card>
+          ))}
+        </div>
+
+        <div className="staff-home-grid">
+          <Card>
+            <div className="ui-card-content">
+              <div className="dashboard-card-heading"><div><span className="eyebrow">Work queue</span><h2>My Tasks</h2></div><Link className="dashboard-text-link" href="/tasks">View all</Link></div>
+              {data.tasks.length ? data.tasks.map((task) => (
+                <Link key={task.id} href={`/tasks/${task.id}`} className="staff-home-row">
+                  <div><strong>{task.title}</strong><span>{pretty(task.status)} · {task.due_at ? fmt(task.due_at) : 'No deadline'}</span></div>
+                  <Badge tone={task.priority === 'HIGH' || task.priority === 'URGENT' ? 'warning' : 'neutral'}>{task.priority}</Badge>
+                </Link>
+              )) : <p className="ui-help">No open tasks.</p>}
+            </div>
+          </Card>
+
+          <Card>
+            <div className="ui-card-content">
+              <div className="dashboard-card-heading"><div><span className="eyebrow">Pipeline</span><h2>My Leads</h2></div><Link className="dashboard-text-link" href="/my-work">Open leads</Link></div>
+              {data.leads.length ? data.leads.map((lead) => (
+                <Link key={lead.id} href={`/my-work/leads/${lead.id}`} className="staff-home-row">
+                  <div><strong>{lead.organization_name}</strong><span>{pretty(lead.stage)} · {lead.pursuit_progress}% pursuit</span></div>
+                  <Badge tone={lead.priority === 'HIGH' || lead.priority === 'URGENT' ? 'warning' : 'neutral'}>{lead.priority}</Badge>
+                </Link>
+              )) : <p className="ui-help">No Leads assigned to you.</p>}
+            </div>
+          </Card>
+        </div>
+
+        <Card>
+          <div className="ui-card-content">
+            <div className="dashboard-card-heading"><div><span className="eyebrow">Next actions</span><h2>Upcoming Follow-ups</h2></div><Link className="dashboard-text-link" href="/follow-ups">See all</Link></div>
+            {data.followups.length ? data.followups.map((followup) => (
+              <div key={followup.id} className="dashboard-list-row">
+                <div><strong>{followup.title}</strong><div className="ui-help">{followup.organization_name || 'General'}</div></div>
+                <time className="dashboard-row-time" dateTime={followup.scheduled_at}>{fmt(followup.scheduled_at)}</time>
+              </div>
+            )) : <p className="ui-help">No upcoming follow-ups.</p>}
+          </div>
+        </Card>
+      </div>
+    </AppShell>
+  );
+}

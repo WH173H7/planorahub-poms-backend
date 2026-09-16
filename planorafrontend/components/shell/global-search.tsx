@@ -1,3 +1,180 @@
 'use client';
-import Link from 'next/link';import {useEffect,useRef,useState} from 'react';import {Icon} from '@/components/ui/icon';import {crmSearch,type SearchResult} from '@/lib/workspace/ops-api';
-export function GlobalSearch(){const[q,setQ]=useState(''),[rows,setRows]=useState<SearchResult[]>([]),[open,setOpen]=useState(false),[busy,setBusy]=useState(false),wrap=useRef<HTMLDivElement>(null);useEffect(()=>{const t=setTimeout(async()=>{if(q.trim().length<2){setRows([]);return}setBusy(true);try{setRows(await crmSearch(q))}finally{setBusy(false)}},180);return()=>clearTimeout(t)},[q]);useEffect(()=>{const f=(e:KeyboardEvent)=>{if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){e.preventDefault();wrap.current?.querySelector('input')?.focus()}};document.addEventListener('keydown',f);return()=>document.removeEventListener('keydown',f)},[]);return <div ref={wrap} style={{position:'relative'}}><div className="search-placeholder" style={{cursor:'text'}}><Icon name="search"/><input aria-label="Search CRM" value={q} onFocus={()=>setOpen(true)} onChange={e=>{setQ(e.target.value);setOpen(true)}} placeholder="Search CRM" style={{border:0,outline:0,background:'transparent',width:'100%',font:'inherit'}}/><small style={{opacity:.55}}>⌘K</small></div>{open&&q.trim().length>=2?<div style={{position:'absolute',top:'calc(100% + 8px)',right:0,width:420,maxHeight:460,overflow:'auto',background:'#fff',border:'1px solid #e7e1e8',borderRadius:14,boxShadow:'0 18px 50px rgba(40,16,47,.16)',zIndex:80,padding:8}}>{busy?<div style={{padding:16}} className="ui-help">Searching…</div>:rows.length?rows.map(r=><Link key={`${r.kind}-${r.id}`} href={r.href} onClick={()=>{setOpen(false);setQ('')}} style={{display:'grid',gridTemplateColumns:'72px 1fr',gap:10,padding:'11px 12px',borderRadius:10,textDecoration:'none',color:'inherit'}}><span className="eyebrow">{r.kind}</span><span><strong>{r.title}</strong><small style={{display:'block',color:'#7b707e',marginTop:2}}>{r.subtitle}</small></span></Link>):<div style={{padding:16}} className="ui-help">No CRM records found.</div>}</div>:null}</div>}
+
+import Link from 'next/link';
+import { useEffect, useRef, useState } from 'react';
+import { Icon } from '@/components/ui/icon';
+import { crmSearch, type SearchResult } from '@/lib/workspace/ops-api';
+
+function SearchResults({
+  rows,
+  busy,
+  onPick,
+}: {
+  rows: SearchResult[];
+  busy: boolean;
+  onPick: () => void;
+}) {
+  if (busy) return <div className="global-search-state">Searching…</div>;
+  if (!rows.length) return <div className="global-search-state">No CRM records found.</div>;
+
+  return (
+    <div className="global-search-results">
+      {rows.map((result) => (
+        <Link
+          key={`${result.kind}-${result.id}`}
+          href={result.href}
+          className="global-search-result"
+          onClick={onPick}
+        >
+          <span className="global-search-kind">{result.kind}</span>
+          <span className="global-search-copy">
+            <strong>{result.title}</strong>
+            <small>{result.subtitle}</small>
+          </span>
+        </Link>
+      ))}
+    </div>
+  );
+}
+
+export function GlobalSearch() {
+  const [query, setQuery] = useState('');
+  const [rows, setRows] = useState<SearchResult[]>([]);
+  const [desktopOpen, setDesktopOpen] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const wrap = useRef<HTMLDivElement>(null);
+  const desktopInput = useRef<HTMLInputElement>(null);
+  const mobileInput = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const timer = window.setTimeout(async () => {
+      if (query.trim().length < 2) {
+        setRows([]);
+        setBusy(false);
+        return;
+      }
+
+      setBusy(true);
+      try {
+        setRows(await crmSearch(query));
+      } finally {
+        setBusy(false);
+      }
+    }, 180);
+
+    return () => window.clearTimeout(timer);
+  }, [query]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        if (window.innerWidth <= 1100) {
+          setMobileOpen(true);
+          window.setTimeout(() => mobileInput.current?.focus(), 0);
+        } else {
+          setDesktopOpen(true);
+          desktopInput.current?.focus();
+        }
+      }
+
+      if (event.key === 'Escape') {
+        setDesktopOpen(false);
+        setMobileOpen(false);
+      }
+    };
+
+    const onPointerDown = (event: MouseEvent) => {
+      if (!wrap.current?.contains(event.target as Node)) setDesktopOpen(false);
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('mousedown', onPointerDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('mousedown', onPointerDown);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const oldOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    window.setTimeout(() => mobileInput.current?.focus(), 0);
+    return () => {
+      document.body.style.overflow = oldOverflow;
+    };
+  }, [mobileOpen]);
+
+  const closeAndReset = () => {
+    setDesktopOpen(false);
+    setMobileOpen(false);
+    setQuery('');
+    setRows([]);
+  };
+
+  return (
+    <>
+      <div ref={wrap} className="global-search desktop-global-search">
+        <div className="search-placeholder">
+          <Icon name="search" />
+          <input
+            ref={desktopInput}
+            aria-label="Search CRM"
+            value={query}
+            onFocus={() => setDesktopOpen(true)}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setDesktopOpen(true);
+            }}
+            placeholder="Search CRM"
+          />
+          <kbd>⌘K</kbd>
+        </div>
+
+        {desktopOpen && query.trim().length >= 2 ? (
+          <div className="global-search-popover">
+            <SearchResults rows={rows} busy={busy} onPick={closeAndReset} />
+          </div>
+        ) : null}
+      </div>
+
+      <button
+        className="mobile-search-trigger"
+        type="button"
+        aria-label="Search CRM"
+        onClick={() => setMobileOpen(true)}
+      >
+        <Icon name="search" />
+      </button>
+
+      {mobileOpen ? (
+        <div className="mobile-search-shell" role="dialog" aria-modal="true" aria-label="Search CRM">
+          <div className="mobile-search-header">
+            <div className="mobile-search-input-wrap">
+              <Icon name="search" />
+              <input
+                ref={mobileInput}
+                aria-label="Search CRM"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Search leads, tasks, staff, files…"
+              />
+            </div>
+            <button type="button" className="mobile-search-close" onClick={() => setMobileOpen(false)}>
+              Done
+            </button>
+          </div>
+          <div className="mobile-search-content">
+            {query.trim().length >= 2 ? (
+              <SearchResults rows={rows} busy={busy} onPick={closeAndReset} />
+            ) : (
+              <div className="global-search-state">Type at least 2 characters to search the CRM.</div>
+            )}
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+}

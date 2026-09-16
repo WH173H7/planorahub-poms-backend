@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppShell } from '@/components/shell/app-shell';
 import { Alert } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -11,338 +12,57 @@ import { NativeSelect } from '@/components/ui/native-select';
 import { Textarea } from '@/components/ui/textarea';
 import { getCurrentCrmUser } from '@/lib/auth/current-user';
 import {
-  approveSharedFolder,
-  createSharedFolder,
-  downloadSharedFile,
-  listSharedFiles,
-  listSharedFolderScopes,
-  listSharedFolders,
-  uploadSharedFile,
-  type SharedFolderScopes,
+  approveSharedFolder, createSharedFolder, downloadSharedFile, getSharedFileAccess, getSharedFolderAccess,
+  listSharedFiles, listSharedFolderScopes, listSharedFolders, setSharedFileAccess, setSharedFolderAccess,
+  uploadSharedFile, type SharedAccessState, type SharedFolderScopes,
 } from '@/lib/workspace/ops-api';
 
-type Folder = {
-  id: string;
-  name: string;
-  description: string | null;
-  visibility: string;
-  visibility_ids: string[];
-  publication_status: 'DRAFT' | 'PENDING' | 'PUBLISHED' | 'REJECTED';
-  file_count: number;
-  first_name?: string;
-  last_name?: string;
-};
+type Folder={id:string;parent_id?:string|null;name:string;description:string|null;visibility:string;visibility_ids:string[];publication_status:'DRAFT'|'PENDING'|'PUBLISHED'|'REJECTED';file_count:number;first_name?:string;last_name?:string;can_manage?:boolean};
+type SharedFile={id:string;file_name:string;mime_type?:string;file_size:number;first_name?:string;last_name?:string;can_manage?:boolean;inherit_folder_access?:boolean};
+type AccessTarget={type:'FOLDER'|'FILE';id:string;name:string};
 
-type SharedFile = {
-  id: string;
-  file_name: string;
-  file_size: number;
-  first_name?: string;
-  last_name?: string;
-};
-
-export function SharedFilesView() {
-  const [folders, setFolders] = useState<Folder[]>([]);
-  const [selected, setSelected] = useState<Folder | null>(null);
-  const [files, setFiles] = useState<SharedFile[]>([]);
-  const [open, setOpen] = useState(false);
-  const [canCreate, setCanCreate] = useState(false);
-  const [canApprove, setCanApprove] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
-
-  const load = useCallback(async () => {
-    try {
-      setError(null);
-      const [user, rows] = await Promise.all([getCurrentCrmUser(), listSharedFolders()]);
-      setCanCreate(user.role_code === 'SUPER_ADMIN' || user.permissions.includes('shared_files.create'));
-      setCanApprove(user.role_code === 'SUPER_ADMIN' || user.permissions.includes('shared_files.approve'));
-      setFolders(rows as Folder[]);
-      setSelected((current) => current ? (rows.find((row: any) => row.id === current.id) as Folder | undefined) ?? null : null);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Unable to load Shared Files.');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { void load(); }, [load]);
-
-  async function choose(folder: Folder) {
-    setSelected(folder);
-    setBusy(true);
-    setError(null);
-    try {
-      setFiles(await listSharedFiles(folder.id) as SharedFile[]);
-    } catch (caught) {
-      setFiles([]);
-      setError(caught instanceof Error ? caught.message : 'Unable to open this folder.');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function review(status: 'PUBLISHED' | 'REJECTED') {
-    if (!selected) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const updated = await approveSharedFolder(selected.id, status) as Folder;
-      setSelected(updated);
-      await load();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Unable to review this folder.');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function upload(file?: File) {
-    if (!selected || !file) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await uploadSharedFile(selected.id, file);
-      setFiles(await listSharedFiles(selected.id) as SharedFile[]);
-      await load();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Unable to upload this file.');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const pendingCount = folders.filter((folder) => folder.publication_status === 'PENDING').length;
-  const publishedCount = folders.filter((folder) => folder.publication_status === 'PUBLISHED').length;
-
-  return (
-    <AppShell
-      area="auto"
-      title="Shared Files"
-      breadcrumb="Communication"
-      description="Controlled operational folders shared with specific staff, Departments, Teams, Leads, Tasks or everyone."
-      actions={canCreate ? <Button onClick={() => setOpen(true)}>+ New folder</Button> : undefined}
-    >
-      <div className="page-stack">
-        {error ? <Alert tone="error">{error}</Alert> : null}
-
-        <div className="shared-files-kpis">
-          <Card><div className="ui-card-content"><span className="eyebrow">Accessible folders</span><strong className="shared-files-kpi-value">{folders.length}</strong><small className="ui-help">Folders you can currently open</small></div></Card>
-          <Card><div className="ui-card-content"><span className="eyebrow">Published</span><strong className="shared-files-kpi-value">{publishedCount}</strong><small className="ui-help">Available to their approved audience</small></div></Card>
-          <Card><div className="ui-card-content"><span className="eyebrow">Awaiting approval</span><strong className="shared-files-kpi-value">{pendingCount}</strong><small className="ui-help">Wider staff publication requests</small></div></Card>
-        </div>
-
-        <div className="shared-files-layout">
-          <Card>
-            <div className="ui-card-content shared-files-folder-list">
-              <div className="shared-files-list-head">
-                <div><span className="eyebrow">Workspace</span><h2>Folders</h2></div>
-                {loading ? <small className="ui-help">Loading…</small> : null}
-              </div>
-              {!loading && !folders.length ? <p className="ui-help">No shared folders are available yet.</p> : null}
-              {folders.map((folder) => (
-                <button
-                  key={folder.id}
-                  className={selected?.id === folder.id ? 'shared-folder-row is-active' : 'shared-folder-row'}
-                  onClick={() => void choose(folder)}
-                >
-                  <span className="shared-folder-icon">▣</span>
-                  <span className="shared-folder-copy">
-                    <strong>{folder.name}</strong>
-                    <small>{visibilityLabel(folder.visibility)} · {folder.file_count ?? 0} file{Number(folder.file_count) === 1 ? '' : 's'}</small>
-                  </span>
-                  <span className={`shared-folder-status status-${folder.publication_status.toLowerCase()}`}>{statusLabel(folder.publication_status)}</span>
-                </button>
-              ))}
-            </div>
-          </Card>
-
-          <Card>
-            <div className="ui-card-content shared-files-detail">
-              {selected ? (
-                <>
-                  <header className="shared-files-detail-head">
-                    <div>
-                      <span className="eyebrow">{visibilityLabel(selected.visibility)}</span>
-                      <h2>{selected.name}</h2>
-                      <p className="ui-help">{selected.description || 'Shared operational files.'}</p>
-                      <small className="ui-help">Created by {[selected.first_name, selected.last_name].filter(Boolean).join(' ') || 'PlanoraHub staff'} · {statusLabel(selected.publication_status)}</small>
-                    </div>
-                    <div className="shared-files-actions">
-                      {canApprove && selected.publication_status === 'PENDING' ? (
-                        <>
-                          <Button variant="outline" disabled={busy} onClick={() => void review('REJECTED')}>Reject</Button>
-                          <Button disabled={busy} onClick={() => void review('PUBLISHED')}>Approve</Button>
-                        </>
-                      ) : null}
-                      {canCreate ? (
-                        <>
-                          <input ref={fileRef} type="file" hidden onChange={(event) => { void upload(event.target.files?.[0]); event.target.value = ''; }} />
-                          <Button variant="outline" disabled={busy} onClick={() => fileRef.current?.click()}>Upload file</Button>
-                        </>
-                      ) : null}
-                    </div>
-                  </header>
-
-                  {selected.publication_status === 'PENDING' ? (
-                    <Alert tone="info">This folder is waiting for Super Admin approval before its wider audience can access it. The creator and approvers can still review it.</Alert>
-                  ) : null}
-                  {selected.publication_status === 'REJECTED' ? (
-                    <Alert tone="error">This folder was not approved for wider publication. Its creator can still see it.</Alert>
-                  ) : null}
-
-                  <div className="shared-files-file-list">
-                    {busy && !files.length ? <p className="ui-help">Loading files…</p> : null}
-                    {files.length ? files.map((file) => (
-                      <div key={file.id} className="shared-file-row">
-                        <span className="shared-file-icon">↗</span>
-                        <div>
-                          <strong>{file.file_name}</strong>
-                          <small className="ui-help">{formatSize(Number(file.file_size))} · {[file.first_name, file.last_name].filter(Boolean).join(' ') || 'PlanoraHub staff'}</small>
-                        </div>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={async () => {
-                            setError(null);
-                            try {
-                              const result = await downloadSharedFile(file.id);
-                              window.open(result.url, '_blank', 'noopener,noreferrer');
-                            } catch (caught) {
-                              setError(caught instanceof Error ? caught.message : 'Unable to download this file.');
-                            }
-                          }}
-                        >
-                          Download
-                        </Button>
-                      </div>
-                    )) : !busy ? <div className="shared-files-empty"><strong>No files yet</strong><p className="ui-help">Upload the first file to this folder.</p></div> : null}
-                  </div>
-                </>
-              ) : (
-                <div className="shared-files-empty large">
-                  <span>▣</span>
-                  <strong>Select a folder</strong>
-                  <p className="ui-help">Choose a folder on the left to view its files, publication state and sharing scope.</p>
-                </div>
-              )}
-            </div>
-          </Card>
-        </div>
-      </div>
-
-      {open ? <FolderModal close={() => setOpen(false)} saved={async () => { setOpen(false); await load(); }} /> : null}
-    </AppShell>
-  );
+export function SharedFilesView(){
+  const [folders,setFolders]=useState<Folder[]>([]);const [selected,setSelected]=useState<Folder|null>(null);const [files,setFiles]=useState<SharedFile[]>([]);
+  const [query,setQuery]=useState('');const [view,setView]=useState<'GRID'|'LIST'>('GRID');const [open,setOpen]=useState(false);const [access,setAccess]=useState<AccessTarget|null>(null);
+  const [canCreate,setCanCreate]=useState(false);const [canApprove,setCanApprove]=useState(false);const [canManageAccess,setCanManageAccess]=useState(false);const [loading,setLoading]=useState(true);const [busy,setBusy]=useState(false);const [error,setError]=useState<string|null>(null);const fileRef=useRef<HTMLInputElement>(null);
+  const load=useCallback(async()=>{try{setError(null);const[user,rows]=await Promise.all([getCurrentCrmUser(),listSharedFolders()]);setCanCreate(user.role_code==='SUPER_ADMIN'||user.permissions.includes('shared_files.create'));setCanApprove(user.role_code==='SUPER_ADMIN'||user.permissions.includes('shared_files.approve'));setCanManageAccess(user.role_code==='SUPER_ADMIN'||user.permissions.includes('shared_files.manage_access'));setFolders(rows as Folder[]);setSelected(cur=>cur?(rows.find((x:any)=>x.id===cur.id) as Folder|undefined)??null:null)}catch(e){setError(e instanceof Error?e.message:'Unable to load Shared Files.')}finally{setLoading(false)}},[]);
+  useEffect(()=>{void load()},[load]);
+  async function choose(folder:Folder){setSelected(folder);setBusy(true);setError(null);try{setFiles(await listSharedFiles(folder.id) as SharedFile[])}catch(e){setFiles([]);setError(e instanceof Error?e.message:'Unable to open this folder.')}finally{setBusy(false)}}
+  async function upload(file?:File){if(!selected||!file)return;setBusy(true);try{await uploadSharedFile(selected.id,file);setFiles(await listSharedFiles(selected.id) as SharedFile[]);await load()}catch(e){setError(e instanceof Error?e.message:'Unable to upload file.')}finally{setBusy(false)}}
+  async function review(status:'PUBLISHED'|'REJECTED'){if(!selected)return;setBusy(true);try{await approveSharedFolder(selected.id,status);await load();setSelected(cur=>cur?{...cur,publication_status:status}:cur)}catch(e){setError(e instanceof Error?e.message:'Unable to review folder.')}finally{setBusy(false)}}
+  const visibleFolders=useMemo(()=>folders.filter(f=>!query.trim()||`${f.name} ${f.description??''}`.toLowerCase().includes(query.toLowerCase())),[folders,query]);
+  const pending=folders.filter(f=>f.publication_status==='PENDING').length;const totalFiles=folders.reduce((n,f)=>n+Number(f.file_count||0),0);
+  return <AppShell area="auto" title="Shared Files" breadcrumb="Communication" description="A controlled company file explorer. Share folders or individual files with Staff, Departments, Teams and Roles." actions={canCreate?<Button onClick={()=>setOpen(true)}>+ New folder</Button>:undefined}>
+    <div className="page-stack shared-explorer-page">{error?<Alert tone="error">{error}</Alert>:null}
+      <div className="shared-explorer-kpis"><ExplorerKpi label="Accessible folders" value={folders.length} note="Your visible workspace"/><ExplorerKpi label="Files" value={totalFiles} note="Across accessible folders"/><ExplorerKpi label="Awaiting approval" value={pending} note="Wider publication requests"/></div>
+      <Card className="shared-explorer-shell">
+        <aside className="shared-explorer-sidebar"><div className="shared-explorer-side-head"><div><span className="eyebrow">File explorer</span><h2>Folders</h2></div>{loading?<span>…</span>:null}</div><Input placeholder="Search folders…" value={query} onChange={e=>setQuery(e.target.value)}/><div className="shared-explorer-folder-tree">{visibleFolders.length?visibleFolders.map(folder=><button key={folder.id} onClick={()=>void choose(folder)} className={`shared-explorer-folder-row${selected?.id===folder.id?' is-active':''}`}><span className="desktop-folder-mini"><i/><b/></span><span className="shared-explorer-folder-copy"><strong>{folder.name}</strong><small>{folder.file_count||0} file{Number(folder.file_count)===1?'':'s'} · {visibilityLabel(folder.visibility)}</small></span>{folder.publication_status!=='PUBLISHED'?<Badge tone={folder.publication_status==='PENDING'?'warning':'danger'}>{statusLabel(folder.publication_status)}</Badge>:null}</button>):<div className="shared-explorer-empty-small">No matching folders.</div>}</div></aside>
+        <section className="shared-explorer-main">{selected?<><header className="shared-explorer-toolbar"><div className="shared-explorer-breadcrumb"><span>Shared Files</span><b>›</b><strong>{selected.name}</strong></div><div className="shared-explorer-toolbar-actions"><button className={`explorer-view-button${view==='GRID'?' is-active':''}`} onClick={()=>setView('GRID')}>▦</button><button className={`explorer-view-button${view==='LIST'?' is-active':''}`} onClick={()=>setView('LIST')}>☷</button>{canManageAccess&&selected.can_manage?<Button size="sm" variant="outline" onClick={()=>setAccess({type:'FOLDER',id:selected.id,name:selected.name})}>Manage access</Button>:null}{canCreate?<><input ref={fileRef} hidden type="file" onChange={e=>{void upload(e.target.files?.[0]);e.target.value=''}}/><Button size="sm" onClick={()=>fileRef.current?.click()} disabled={busy}>+ Upload</Button></>:null}</div></header><div className="shared-explorer-folder-info"><div><span className="desktop-folder-large"><i/><b/></span><div><h2>{selected.name}</h2><p>{selected.description||'Shared operational folder'}</p><small>Created by {[selected.first_name,selected.last_name].filter(Boolean).join(' ')||'PlanoraHub staff'} · {statusLabel(selected.publication_status)}</small></div></div>{canApprove&&selected.publication_status==='PENDING'?<div className="shared-explorer-review"><Button variant="outline" onClick={()=>void review('REJECTED')}>Reject</Button><Button onClick={()=>void review('PUBLISHED')}>Approve</Button></div>:null}</div>{selected.publication_status==='PENDING'?<Alert tone="info">This folder is awaiting Super Admin approval before wider access becomes active.</Alert>:null}<div className={`shared-explorer-files view-${view.toLowerCase()}`}>{busy&&!files.length?<p className="ui-help">Loading files…</p>:files.length?files.map(file=><FileItem key={file.id} file={file} view={view} manage={canManageAccess&&Boolean(file.can_manage)} onAccess={()=>setAccess({type:'FILE',id:file.id,name:file.file_name})}/>):<div className="shared-explorer-empty"><span className="desktop-folder-large"><i/><b/></span><strong>This folder is empty</strong><p>Upload the first file to start building this shared workspace.</p>{canCreate?<Button variant="outline" onClick={()=>fileRef.current?.click()}>Upload a file</Button>:null}</div>}</div></>:<div className="shared-explorer-welcome"><div className="desktop-folder-hero"><i/><b/></div><h2>Select a folder</h2><p>Choose a folder from the explorer to view files, ownership and access controls.</p></div>}</section>
+      </Card>
+    </div>
+    {open?<FolderModal close={()=>setOpen(false)} saved={async()=>{setOpen(false);await load()}}/>:null}
+    {access?<AccessModal target={access} close={()=>setAccess(null)} saved={async()=>{setAccess(null);if(selected){setFiles(await listSharedFiles(selected.id) as SharedFile[]);await load()}}}/>:null}
+  </AppShell>
 }
 
-function FolderModal({ close, saved }: { close: () => void; saved: () => Promise<void> }) {
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [visibility, setVisibility] = useState('PRIVATE');
-  const [ids, setIds] = useState<string[]>([]);
-  const [scopes, setScopes] = useState<SharedFolderScopes | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+function ExplorerKpi({label,value,note}:{label:string;value:number;note:string}){return <Card><div className="ui-card-content"><span className="eyebrow">{label}</span><strong className="shared-explorer-kpi-value">{value}</strong><small className="ui-help">{note}</small></div></Card>}
+function FileItem({file,view,manage,onAccess}:{file:SharedFile;view:'GRID'|'LIST';manage:boolean;onAccess:()=>void}){const kind=fileKind(file.file_name,file.mime_type);return <article className={`shared-explorer-file-card view-${view.toLowerCase()}`}><div className={`desktop-file-icon kind-${kind}`}><span>{extension(file.file_name)}</span></div><div className="shared-explorer-file-copy"><strong>{file.file_name}</strong><small>{formatSize(Number(file.file_size))} · {[file.first_name,file.last_name].filter(Boolean).join(' ')||'PlanoraHub staff'}</small>{file.inherit_folder_access===false?<Badge tone="warning">Custom access</Badge>:null}</div><div className="shared-explorer-file-actions">{manage?<Button size="sm" variant="ghost" onClick={onAccess}>Access</Button>:null}<Button size="sm" variant="outline" onClick={async()=>{const r=await downloadSharedFile(file.id);window.open(r.url,'_blank','noopener,noreferrer')}}>Open</Button></div></article>}
 
-  useEffect(() => {
-    let active = true;
-    listSharedFolderScopes()
-      .then((rows) => { if (active) setScopes(rows); })
-      .catch((caught) => { if (active) setError(caught instanceof Error ? caught.message : 'Unable to load sharing options.'); });
-    return () => { active = false; };
-  }, []);
+function FolderModal({close,saved}:{close:()=>void;saved:()=>Promise<void>}){const[name,setName]=useState(''),[description,setDescription]=useState(''),[visibility,setVisibility]=useState('PRIVATE'),[ids,setIds]=useState<string[]>([]),[scopes,setScopes]=useState<SharedFolderScopes|null>(null),[saving,setSaving]=useState(false),[error,setError]=useState<string|null>(null);useEffect(()=>{listSharedFolderScopes().then(setScopes).catch(e=>setError(e instanceof Error?e.message:'Unable to load access options.'))},[]);useEffect(()=>setIds([]),[visibility]);const options=useMemo(()=>scopeOptions(scopes,visibility),[scopes,visibility]);const targets=!['PRIVATE','EVERYONE'].includes(visibility);return <Modal open onClose={close} title="Create shared folder"><form className="stack" onSubmit={async e=>{e.preventDefault();if(targets&&!ids.length){setError('Choose at least one sharing target.');return}setSaving(true);try{await createSharedFolder({name,description,visibility,visibilityIds:ids});await saved()}catch(err){setError(err instanceof Error?err.message:'Unable to create folder.');setSaving(false)}}}>{error?<Alert tone="error">{error}</Alert>:null}<div className="shared-folder-create-preview"><span className="desktop-folder-large"><i/><b/></span><div><strong>{name||'New folder'}</strong><p>This will appear as a real folder in the PlanoraHub file explorer.</p></div></div><Input label="Folder name *" value={name} onChange={e=>setName(e.target.value)} required/><Textarea label="Description" rows={3} value={description} onChange={e=>setDescription(e.target.value)}/><NativeSelect label="Initial access" value={visibility} onChange={e=>setVisibility(e.target.value)}><option value="PRIVATE">Private — only me</option><option value="EVERYONE">Everyone</option><option value="SELECTED">Selected staff</option><option value="DEPARTMENT">Department</option><option value="TEAM">Team</option><option value="LEAD">Lead participants</option><option value="TASK">Task participants</option></NativeSelect>{targets?<div className="shared-scope-picker">{options.map(x=><label key={x.id} className="shared-scope-option"><input type="checkbox" checked={ids.includes(x.id)} onChange={e=>setIds(v=>e.target.checked?[...v,x.id]:v.filter(id=>id!==x.id))}/><span><strong>{x.label}</strong>{x.subtitle?<small>{x.subtitle}</small>:null}</span></label>)}</div>:null}<div className="task-form-actions"><Button type="button" variant="outline" onClick={close}>Cancel</Button><Button type="submit" loading={saving}>Create folder</Button></div></form></Modal>}
 
-  useEffect(() => { setIds([]); }, [visibility]);
+function AccessModal({target,close,saved}:{target:AccessTarget;close:()=>void;saved:()=>Promise<void>}){
+  const[state,setState]=useState<SharedAccessState|null>(null),[scopes,setScopes]=useState<SharedFolderScopes|null>(null),[everyone,setEveryone]=useState(false),[inherit,setInherit]=useState(true),[grants,setGrants]=useState<Array<{subjectType:string;subjectId:string;canManage:boolean}>>([]),[saving,setSaving]=useState(false),[error,setError]=useState<string|null>(null),[query,setQuery]=useState(''),[tab,setTab]=useState<'STAFF'|'DEPARTMENT'|'TEAM'|'ROLE'>('STAFF');
+  useEffect(()=>{Promise.all([listSharedFolderScopes(),target.type==='FOLDER'?getSharedFolderAccess(target.id):getSharedFileAccess(target.id)]).then(([s,a])=>{setScopes(s);setState(a);setEveryone(a.everyone);setInherit(a.inheritFolderAccess!==false);setGrants(a.grants.map(g=>({subjectType:g.subject_type,subjectId:g.subject_id,canManage:g.can_manage})))}).catch(e=>setError(e instanceof Error?e.message:'Unable to load access.'))},[target]);
+  const groups=scopes?[{type:'STAFF',label:'Staff',items:scopes.staff.map(x=>({id:x.id,label:`${x.first_name} ${x.last_name}`,sub:[x.job_title,x.email,x.status].filter(Boolean).join(' · ')}))},{type:'DEPARTMENT',label:'Departments',items:scopes.departments.map(x=>({id:x.id,label:x.name,sub:x.is_active===false?'Inactive department':'Department'}))},{type:'TEAM',label:'Teams',items:scopes.teams.map(x=>({id:x.id,label:x.name,sub:x.is_active===false?'Inactive team':'Team'}))},{type:'ROLE',label:'Roles',items:scopes.roles.map(x=>({id:x.id,label:x.name,sub:`${x.code}${x.is_active===false?' · Inactive':''}`}))}]:[];
+  const visibleGroups=groups.filter(g=>g.type===tab).map(g=>({...g,items:g.items.filter(item=>!query.trim()||`${item.label} ${item.sub}`.toLowerCase().includes(query.toLowerCase()))}));
+  function toggle(type:string,id:string,checked:boolean){setGrants(g=>checked?[...g.filter(x=>!(x.subjectType===type&&x.subjectId===id)),{subjectType:type,subjectId:id,canManage:false}]:g.filter(x=>!(x.subjectType===type&&x.subjectId===id)))}
+  function manage(type:string,id:string,value:boolean){setGrants(g=>g.map(x=>x.subjectType===type&&x.subjectId===id?{...x,canManage:value}:x))}
+  const counts={STAFF:scopes?.staff.length||0,DEPARTMENT:scopes?.departments.length||0,TEAM:scopes?.teams.length||0,ROLE:scopes?.roles.length||0};
+  return <Modal open onClose={close} title={`Manage access · ${target.name}`}><div className="shared-access-modal">{error?<Alert tone="error">{error}</Alert>:null}{!state?<div className="shared-access-loading">Loading access rules…</div>:<><div className="shared-access-hero"><div><span className="eyebrow">{target.type==='FOLDER'?'Folder permissions':'File permissions'}</span><h3>{target.name}</h3><p>Control who can open this {target.type==='FOLDER'?'folder':'file'} and who is allowed to manage its access.</p></div><div className="shared-access-hero-count"><strong>{grants.length}</strong><span>custom grants</span></div></div>{target.type==='FOLDER'?<label className="shared-access-toggle featured"><input type="checkbox" checked={everyone} onChange={e=>setEveryone(e.target.checked)}/><span><strong>Everyone in PlanoraHub can open this folder</strong><small>Turn this off to use only Staff, Department, Team or Role grants below.</small></span></label>:<label className="shared-access-toggle featured"><input type="checkbox" checked={inherit} onChange={e=>setInherit(e.target.checked)}/><span><strong>Inherit access from parent folder</strong><small>Keep this on unless this specific file needs a different audience.</small></span></label>}<div className="shared-access-toolbar"><Input placeholder="Search staff, departments, teams or roles…" value={query} onChange={e=>setQuery(e.target.value)}/><div className="shared-access-tabs">{([['STAFF','Staff',counts.STAFF],['DEPARTMENT','Departments',counts.DEPARTMENT],['TEAM','Teams',counts.TEAM],['ROLE','Roles',counts.ROLE]] as const).map(([value,label,count])=><button key={value} className={tab===value?'is-active':''} onClick={()=>setTab(value)}>{label}<span>{count}</span></button>)}</div></div><div className="shared-access-groups polished">{visibleGroups.map(group=><section key={group.type}><header><div><strong>{group.label}</strong><span>{grants.filter(g=>g.subjectType===group.type).length} selected · {group.items.length} shown</span></div></header>{group.items.length?<div className="shared-access-option-list">{group.items.map(item=>{const grant=grants.find(g=>g.subjectType===group.type&&g.subjectId===item.id);return <div key={item.id} className={`shared-access-option${grant?' is-selected':''}`}><label className="shared-access-main-choice"><input type="checkbox" checked={Boolean(grant)} onChange={e=>toggle(group.type,item.id,e.target.checked)}/><span><strong>{item.label}</strong><small>{item.sub}</small></span></label>{grant?<div className="shared-access-level"><button className={!grant.canManage?'is-active':''} onClick={()=>manage(group.type,item.id,false)}>Can view</button><button className={grant.canManage?'is-active':''} onClick={()=>manage(group.type,item.id,true)}>Can manage</button></div>:null}</div>})}</div>:<div className="shared-access-empty">No matching {group.label.toLowerCase()}.</div>}</section>)}</div><footer className="shared-access-footer"><div><strong>{grants.length} custom grant{grants.length===1?'':'s'}</strong><span>{target.type==='FOLDER'&&everyone?' plus company-wide view access':''}</span></div><div><Button variant="outline" onClick={close}>Cancel</Button><Button loading={saving} onClick={async()=>{setSaving(true);try{if(target.type==='FOLDER')await setSharedFolderAccess(target.id,{everyone,grants});else await setSharedFileAccess(target.id,{inheritFolderAccess:inherit,grants});await saved()}catch(e){setError(e instanceof Error?e.message:'Unable to save access.');setSaving(false)}}}>Save access</Button></div></footer></>}</div></Modal>}
 
-  const options = useMemo(() => scopeOptions(scopes, visibility), [scopes, visibility]);
-  const needsTargets = !['PRIVATE', 'EVERYONE'].includes(visibility);
-
-  return (
-    <Modal open onClose={close} title="New shared folder">
-      <form
-        className="stack"
-        onSubmit={async (event) => {
-          event.preventDefault();
-          if (needsTargets && !ids.length) { setError('Choose at least one sharing target.'); return; }
-          setSaving(true);
-          setError(null);
-          try {
-            await createSharedFolder({ name, description, visibility, visibilityIds: ids });
-            await saved();
-          } catch (caught) {
-            setError(caught instanceof Error ? caught.message : 'Unable to create this folder.');
-            setSaving(false);
-          }
-        }}
-      >
-        {error ? <Alert tone="error">{error}</Alert> : null}
-        <Input label="Folder name *" value={name} onChange={(event) => setName(event.target.value)} required />
-        <Textarea label="Description" value={description} onChange={(event) => setDescription(event.target.value)} rows={3} />
-        <NativeSelect label="Who can see this?" value={visibility} onChange={(event) => setVisibility(event.target.value)}>
-          <option value="PRIVATE">Only me</option>
-          <option value="EVERYONE">Everyone</option>
-          <option value="SELECTED">Selected staff</option>
-          <option value="DEPARTMENT">Department</option>
-          <option value="TEAM">Team</option>
-          <option value="LEAD">People associated with a Lead</option>
-          <option value="TASK">People associated with a Task</option>
-        </NativeSelect>
-
-        {needsTargets ? (
-          <div className="shared-scope-picker">
-            <div className="shared-scope-picker-head">
-              <div><strong>{scopeHeading(visibility)}</strong><small className="ui-help">Select one or more. Staff-created wider folders are sent for Super Admin approval.</small></div>
-              <span>{ids.length} selected</span>
-            </div>
-            {!scopes ? <p className="ui-help">Loading available options…</p> : options.length ? options.map((option) => (
-              <label key={option.id} className="shared-scope-option">
-                <input
-                  type="checkbox"
-                  checked={ids.includes(option.id)}
-                  onChange={(event) => setIds((current) => event.target.checked ? [...current, option.id] : current.filter((id) => id !== option.id))}
-                />
-                <span><strong>{option.label}</strong>{option.subtitle ? <small>{option.subtitle}</small> : null}</span>
-              </label>
-            )) : <p className="ui-help">No options are available for this scope.</p>}
-          </div>
-        ) : null}
-
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-          <Button type="button" variant="outline" onClick={close} disabled={saving}>Cancel</Button>
-          <Button type="submit" loading={saving}>Create folder</Button>
-        </div>
-      </form>
-    </Modal>
-  );
-}
-
-function scopeOptions(scopes: SharedFolderScopes | null, visibility: string) {
-  if (!scopes) return [] as Array<{ id: string; label: string; subtitle?: string }>;
-  if (visibility === 'SELECTED') return scopes.staff.map((row) => ({ id: row.id, label: `${row.first_name} ${row.last_name}`, subtitle: row.job_title || 'Staff' }));
-  if (visibility === 'DEPARTMENT') return scopes.departments.map((row) => ({ id: row.id, label: row.name, subtitle: 'Department' }));
-  if (visibility === 'TEAM') return scopes.teams.map((row) => ({ id: row.id, label: row.name, subtitle: 'Cross-department Team' }));
-  if (visibility === 'LEAD') return scopes.leads.map((row) => ({ id: row.id, label: row.title, subtitle: row.subtitle?.replaceAll('_', ' ') || 'Lead' }));
-  if (visibility === 'TASK') return scopes.tasks.map((row) => ({ id: row.id, label: row.title, subtitle: row.subtitle?.replaceAll('_', ' ') || 'Task' }));
-  return [];
-}
-
-function scopeHeading(visibility: string) {
-  return ({ SELECTED: 'Select staff', DEPARTMENT: 'Select Departments', TEAM: 'Select Teams', LEAD: 'Select Leads', TASK: 'Select Tasks' } as Record<string, string>)[visibility] || 'Select audience';
-}
-
-function visibilityLabel(value: string) {
-  return ({ PRIVATE: 'Private', EVERYONE: 'Everyone', SELECTED: 'Selected staff', DEPARTMENT: 'Department', TEAM: 'Team', LEAD: 'Lead participants', TASK: 'Task participants' } as Record<string, string>)[value] || value;
-}
-
-function statusLabel(value: Folder['publication_status']) {
-  return ({ DRAFT: 'Draft', PENDING: 'Pending approval', PUBLISHED: 'Published', REJECTED: 'Rejected' } as Record<string, string>)[value] || value;
-}
-
-function formatSize(bytes: number) {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 KB';
-  if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
-}
+function scopeOptions(scopes:SharedFolderScopes|null,visibility:string){if(!scopes)return[] as Array<{id:string;label:string;subtitle?:string}>;if(visibility==='SELECTED')return scopes.staff.map(x=>({id:x.id,label:`${x.first_name} ${x.last_name}`,subtitle:x.job_title||'Staff'}));if(visibility==='DEPARTMENT')return scopes.departments.map(x=>({id:x.id,label:x.name,subtitle:'Department'}));if(visibility==='TEAM')return scopes.teams.map(x=>({id:x.id,label:x.name,subtitle:'Team'}));if(visibility==='LEAD')return scopes.leads.map(x=>({id:x.id,label:x.title,subtitle:x.subtitle||'Lead'}));if(visibility==='TASK')return scopes.tasks.map(x=>({id:x.id,label:x.title,subtitle:x.subtitle||'Task'}));return[]}
+function visibilityLabel(value:string){return({PRIVATE:'Private',EVERYONE:'Everyone',SELECTED:'Selected staff',DEPARTMENT:'Department',TEAM:'Team',LEAD:'Lead participants',TASK:'Task participants'} as Record<string,string>)[value]||value}
+function statusLabel(value:string){return({DRAFT:'Draft',PENDING:'Pending approval',PUBLISHED:'Published',REJECTED:'Rejected'} as Record<string,string>)[value]||value}
+function formatSize(value:number){if(value<1024)return`${value} B`;if(value<1024*1024)return`${(value/1024).toFixed(1)} KB`;return`${(value/(1024*1024)).toFixed(1)} MB`}
+function extension(name:string){const ext=name.split('.').pop()?.toUpperCase()||'FILE';return ext.length>5?'FILE':ext}
+function fileKind(name:string,mime?:string){const x=(mime||name).toLowerCase();if(x.includes('pdf'))return'pdf';if(x.includes('image')||/\.(png|jpg|jpeg|webp|gif)$/.test(x))return'image';if(/\.(doc|docx)$/.test(x))return'doc';if(/\.(xls|xlsx|csv)$/.test(x))return'sheet';return'file'}

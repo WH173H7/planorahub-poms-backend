@@ -27,9 +27,10 @@ export const updateManagedTeamMembers=async(id:string,body:{memberIds:string[];m
 export const staffOpsAnalytics=async()=> (await apiFetch<R<any>>('/admin/staff-ops-analytics')).data;
 
 export type SharedFolderScopes={
-  staff:Array<{id:string;first_name:string;last_name:string;job_title:string|null}>;
-  departments:Array<{id:string;name:string}>;
-  teams:Array<{id:string;name:string}>;
+  staff:Array<{id:string;first_name:string;last_name:string;email?:string;job_title:string|null;status?:string}>;
+  departments:Array<{id:string;name:string;is_active?:boolean}>;
+  teams:Array<{id:string;name:string;is_active?:boolean}>;
+  roles:Array<{id:string;name:string;code:string;is_active?:boolean}>;
   leads:Array<{id:string;title:string;subtitle:string|null}>;
   tasks:Array<{id:string;title:string;subtitle:string|null}>;
 };
@@ -40,4 +41,12 @@ export const approveSharedFolder=async(id:string,status:'PUBLISHED'|'REJECTED')=
 export const listSharedFiles=async(id:string)=> (await apiFetch<R<any[]>>(`/shared-folders/${id}/files`)).data;
 export const uploadSharedFile=async(id:string,file:File)=>{const form=new FormData();form.append('file',file);return (await apiFetch<R<any>>(`/shared-folders/${id}/files`,{method:'POST',body:form})).data};
 export const downloadSharedFile=async(id:string)=> (await apiFetch<R<{url:string;fileName:string}>>(`/shared-files/${id}/download`)).data;
+
+export type SharedAccessGrant={subject_type:'STAFF'|'DEPARTMENT'|'TEAM'|'ROLE';subject_id:string;can_manage:boolean};
+export type SharedAccessState={itemType:'FOLDER'|'FILE';id:string;everyone:boolean;publicationStatus:string|null;inheritFolderAccess:boolean|null;grants:SharedAccessGrant[]};
+export const getSharedFolderAccess=async(id:string)=> (await apiFetch<R<SharedAccessState>>(`/shared-folders/${id}/access`)).data;
+export const setSharedFolderAccess=async(id:string,body:{everyone:boolean;grants:Array<{subjectType:string;subjectId:string;canManage:boolean}>})=> (await apiFetch<R<SharedAccessState>>(`/shared-folders/${id}/access`,{method:'PATCH',body:JSON.stringify(body)})).data;
+export const getSharedFileAccess=async(id:string)=> (await apiFetch<R<SharedAccessState>>(`/shared-files/${id}/access`)).data;
+export const setSharedFileAccess=async(id:string,body:{inheritFolderAccess:boolean;grants:Array<{subjectType:string;subjectId:string;canManage:boolean}>})=> (await apiFetch<R<SharedAccessState>>(`/shared-files/${id}/access`,{method:'PATCH',body:JSON.stringify(body)})).data;
+
 export const createGoogleCalendarEvent=async(body:any)=> (await apiFetch<R<any>>('/google-calendar/events',{method:'POST',body:JSON.stringify(body)})).data;

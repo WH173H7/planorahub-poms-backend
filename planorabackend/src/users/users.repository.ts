@@ -114,7 +114,7 @@ export class UsersRepository {
   }
 
   async getRole(roleId:string) {
-    const r=await this.db.query(`SELECT id,code,name FROM roles WHERE id=$1 LIMIT 1`,[roleId]);
+    const r=await this.db.query(`SELECT id,code,name,description,is_system_role,COALESCE(is_active,TRUE) AS is_active FROM roles WHERE id=$1 LIMIT 1`,[roleId]);
     return r.rows[0]??null;
   }
 

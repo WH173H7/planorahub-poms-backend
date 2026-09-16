@@ -1,138 +1,95 @@
-"use client";
+'use client';
 
-import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { type ChangeEvent, useCallback, useEffect, useState } from "react";
-import { AppShell } from "@/components/shell/app-shell";
-import { Badge, type Tone } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { Modal } from "@/components/ui/modal";
-import { PageErrorState, PageLoadingState } from "@/components/ui/page-state";
-import { getCurrentCrmUser } from "@/lib/auth/current-user";
-import { hasAdministrativeAccess } from "@/lib/auth/routing";
-import { deleteTask, getTask, updateTask, uploadTaskAttachment } from "@/lib/leads/api";
-import { formatDate } from "@/lib/leads/helpers";
-import { reviewTask, taskAccept, taskStart, taskSubmit } from "@/lib/delivery/api";
-import { toggleTaskWorkflowStep } from "@/lib/workspace/api";
-import type { TaskDetail } from "@/lib/leads/types";
+import Link from 'next/link';
+import {type ChangeEvent,useCallback,useEffect,useState} from 'react';
+import {AppShell} from '@/components/shell/app-shell';
+import {Badge,type Tone} from '@/components/ui/badge';
+import {Button} from '@/components/ui/button';
+import {Card} from '@/components/ui/card';
+import {Modal} from '@/components/ui/modal';
+import {PageErrorState,PageLoadingState} from '@/components/ui/page-state';
+import {getCurrentCrmUser} from '@/lib/auth/current-user';
+import {hasAdministrativeAccess} from '@/lib/auth/routing';
+import {controlTask,getTask,updateTask,uploadTaskAttachment} from '@/lib/leads/api';
+import {formatDate} from '@/lib/leads/helpers';
+import {reviewTask,taskAccept,taskStart,taskSubmit} from '@/lib/delivery/api';
+import {toggleTaskWorkflowStep} from '@/lib/workspace/api';
+import type {TaskDetail} from '@/lib/leads/types';
 
-const statusTone = (status: string): Tone => status === "COMPLETED" ? "success" : status === "BLOCKED" || status === "CANCELLED" ? "danger" : status === "IN_PROGRESS" ? "info" : "neutral";
-const priorityTone = (priority: string): Tone => priority === "URGENT" ? "danger" : priority === "HIGH" ? "warning" : priority === "MEDIUM" ? "purple" : "neutral";
-const pretty = (value: string) => value === "AWAITING_RESPONSE" ? "Submitted for Review" : value === "BLOCKED" ? "Needs Revision / Blocked" : value.replaceAll("_", " ").toLowerCase().replace(/^./, (letter) => letter.toUpperCase());
-const person = (first?: string | null, last?: string | null) => [first, last].filter(Boolean).join(" ") || "—";
-const fileSize = (bytes: number | null) => bytes == null ? "" : bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+const pretty=(v:string)=>v==='AWAITING_RESPONSE'?'Submitted for review':v==='BLOCKED'?'Needs revision':v.replaceAll('_',' ').toLowerCase().replace(/^./,x=>x.toUpperCase());
+const statusTone=(s:string):Tone=>s==='COMPLETED'?'success':s==='BLOCKED'||s==='CANCELLED'?'danger':s==='IN_PROGRESS'?'info':s==='AWAITING_RESPONSE'?'warning':'neutral';
+const priorityTone=(p:string):Tone=>p==='URGENT'?'danger':p==='HIGH'?'warning':p==='MEDIUM'?'purple':'neutral';
+const controlTone=(s:string):Tone=>s==='PAUSED'?'warning':s==='CANCELLED'?'danger':s==='SCHEDULED'?'info':'success';
+const person=(f?:string|null,l?:string|null)=>[f,l].filter(Boolean).join(' ')||'—';
+const fileSize=(bytes:number|null)=>bytes==null?'':bytes<1024?`${bytes} B`:bytes<1024*1024?`${Math.round(bytes/1024)} KB`:`${(bytes/(1024*1024)).toFixed(1)} MB`;
 
-export function TaskDetailView({ taskId }: { taskId: string }) {
-  const router = useRouter();
-  const [staff, setStaff] = useState<boolean | null>(null);
-  const [task, setTask] = useState<TaskDetail | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [editing, setEditing] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [completing, setCompleting] = useState(false);
-  const [workflowBusy, setWorkflowBusy] = useState(false);
+export function TaskDetailView({taskId}:{taskId:string}){
+  const [staffMode,setStaffMode]=useState<boolean|null>(null);
+  const [currentUserId,setCurrentUserId]=useState<string|null>(null);
+  const [task,setTask]=useState<TaskDetail|null>(null);
+  const [error,setError]=useState<string|null>(null);
+  const [busy,setBusy]=useState(false);
+  const [editing,setEditing]=useState(false);
+  const [uploading,setUploading]=useState(false);
+  const [reviewNote,setReviewNote]=useState('');
+  const load=useCallback(async()=>{try{const user=await getCurrentCrmUser();const isStaff=!hasAdministrativeAccess(user);setStaffMode(isStaff);setCurrentUserId(user.id);setTask(await getTask(taskId,isStaff));setError(null)}catch(e){setError(e instanceof Error?e.message:'Unable to load task')}},[taskId]);
+  useEffect(()=>{void load()},[load]);
+  if(staffMode===null)return <main><PageLoadingState/></main>;
+  if(error||!task)return <AppShell area={staffMode?'staff':'admin'} title="Task" breadcrumb="Work / Tasks"><PageErrorState message={error||'Task not found'}/></AppShell>;
 
-  const load = useCallback(async () => {
-    try {
-      const user = await getCurrentCrmUser();
-      const isStaff = !hasAdministrativeAccess(user);
-      setStaff(isStaff);
-      setTask(await getTask(taskId, isStaff));
-      setError(null);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Unable to load task.");
-    }
-  }, [taskId]);
-
-  useEffect(() => { void Promise.resolve().then(load); }, [load]);
-
-  if (staff === null) return <main><PageLoadingState /></main>;
-  if (error || !task) return <AppShell area={staff ? "staff" : "admin"} title="Task" breadcrumb="Work / Tasks"><PageErrorState message={error || "Task not found."} /></AppShell>;
-
-  const generated = Boolean(task.lead_assignment_batch);
-  const assignmentItems = task.lead_assignment_batch?.items ?? [];
-  const directRelated = Boolean(task.organization_id || task.lead_id || task.contact_id);
-
-  async function upload(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    setUploading(true);
-    try { await uploadTaskAttachment(taskId, file, Boolean(staff)); await load(); }
-    finally { setUploading(false); event.target.value = ""; }
+  async function staffAction(action:'accept'|'start'|'submit'){
+    setBusy(true);try{if(action==='accept')await taskAccept(taskId);if(action==='start')await taskStart(taskId);if(action==='submit')await taskSubmit(taskId);await load()}finally{setBusy(false)}
   }
-
-  async function complete() {
-    setCompleting(true);
-    try { await updateTask(taskId, { status: "COMPLETED" }, Boolean(staff)); await load(); }
-    finally { setCompleting(false); }
+  async function review(decision:'APPROVE'|'REVISION'){
+    setBusy(true);try{await reviewTask(taskId,decision,reviewNote.trim()||undefined);setReviewNote('');await load()}finally{setBusy(false)}
   }
-  async function workflow(action:'accept'|'start'|'submit'|'approve'|'revision'){
-    setWorkflowBusy(true);
-    try{
-      if(action==='accept')await taskAccept(taskId);
-      if(action==='start')await taskStart(taskId);
-      if(action==='submit')await taskSubmit(taskId);
-      if(action==='approve')await reviewTask(taskId,'APPROVE');
-      if(action==='revision'){const note=window.prompt('What needs revision?')||undefined;await reviewTask(taskId,'REVISION',note);}
-      await load();
-    }finally{setWorkflowBusy(false)}
+  async function control(action:'PAUSE'|'RESUME'|'CANCEL'|'COMPLETE'|'REOPEN'|'DISPATCH_NOW'){
+    if((action==='CANCEL'||action==='COMPLETE')&&!window.confirm(action==='CANCEL'?'Cancel this task?':'Mark this task completed?'))return;
+    setBusy(true);try{await controlTask(taskId,action);await load()}finally{setBusy(false)}
   }
+  async function upload(e:ChangeEvent<HTMLInputElement>){const file=e.target.files?.[0];if(!file)return;setUploading(true);try{await uploadTaskAttachment(taskId,file,staffMode);await load()}finally{setUploading(false);e.target.value=''}}
 
-  return <AppShell area={staff ? "staff" : "admin"} title={task.title} breadcrumb="Work / Tasks" actions={<div className="task-detail-actions"><Link href="/tasks"><Button variant="outline">← Tasks</Button></Link>{!staff && !generated ? <Button variant="outline" onClick={() => setEditing(true)}>Edit</Button> : null}{!staff && !generated ? <Button variant="danger" onClick={async () => { if (!window.confirm(`Delete task \"${task.title}\"?`)) return; await deleteTask(task.id); router.push("/tasks"); }}>Delete</Button> : null}</div>}>
-    <div className="task-detail-page">
-      <Card className="task-hero-card">
-        <div className="task-hero-copy">
-          <span className="eyebrow">{generated ? "Assignment-generated task" : "Task workspace"}</span>
-          <h1>{task.title}</h1>
-          <p>{task.description || "No instructions have been provided for this task."}</p>
-        </div>
-        <div className="task-hero-badges"><Badge tone={statusTone(task.status)}>{pretty(task.status)}</Badge><Badge tone={priorityTone(task.priority)}>{pretty(task.priority)} priority</Badge></div>
-        <dl className="task-hero-meta">
-          <div><dt>Assignee</dt><dd>{person(task.assignee_first_name, task.assignee_last_name)}</dd></div>
-          <div><dt>Due</dt><dd>{formatDate(task.due_at)}</dd></div>
-          <div><dt>Created by</dt><dd>{person(task.creator_first_name, task.creator_last_name)}</dd></div>
-          <div><dt>Created</dt><dd>{formatDate(task.created_at)}</dd></div>
-        </dl>
+  const target=assignmentName(task);
+  const worker=task.accepted_by_id?person(task.accepted_by_first_name,task.accepted_by_last_name):null;
+  const staffLocked=staffMode&&task.accepted_by_id&&task.accepted_by_id!==undefined&&task.accepted_by_id!==null&&!task.accepted_at?false:false;
+
+  return <AppShell area={staffMode?'staff':'admin'} title={task.title} breadcrumb="Work / Tasks" actions={!staffMode?<Button variant="outline" onClick={()=>setEditing(true)}>Edit task</Button>:undefined}>
+    <div className="p26-task-detail-page">
+      <Card className="workspace-card p26-task-hero">
+        <div className="p26-task-hero-main"><div className="p26-task-hero-badges"><Badge tone={controlTone(task.control_state)}>{pretty(task.control_state)}</Badge><Badge tone={statusTone(task.status)}>{pretty(task.status)}</Badge><Badge tone={priorityTone(task.priority)}>{pretty(task.priority)} priority</Badge></div><h1>{task.title}</h1><p>{task.description||'No additional instructions were provided.'}</p></div>
+        <div className="p26-task-hero-grid"><div><span>Assigned to</span><strong>{target}</strong><small>{pretty(task.assignment_type)}</small></div><div><span>Workflow</span><strong>{task.task_workflow_name||'No workflow'}</strong><small>{task.assignee_role_name||'Task process'}</small></div><div><span>Due</span><strong>{task.due_at?formatDate(task.due_at):'No deadline'}</strong><small>{task.control_state==='SCHEDULED'&&task.scheduled_for?`Dispatches ${formatDate(task.scheduled_for)}`:'Operational deadline'}</small></div><div><span>Accepted by</span><strong>{worker||'Not accepted'}</strong><small>{task.accepted_at?formatDate(task.accepted_at):'Waiting'}</small></div></div>
       </Card>
 
-      <div className="task-detail-layout">
-        <main className="task-detail-main">
-          <Card className="workspace-card task-section-card">
-            <header><div><span className="eyebrow">Work brief</span><h2>Instructions</h2></div></header>
-            <div className="task-instructions"><p>{task.description || "No instructions provided."}</p></div>
-            {staff ? <div className="task-completion-bar"><div><strong>Work sequence</strong><span>Accept → Start → Submit for review. Task completion never changes a Lead stage.</span></div><div style={{display:'flex',gap:8,flexWrap:'wrap'}}>{!task.accepted_at?<Button loading={workflowBusy} onClick={()=>void workflow('accept')}>Accept Task</Button>:null}{task.accepted_at && task.status==='TODO'?<Button loading={workflowBusy} onClick={()=>void workflow('start')}>Start Work</Button>:null}{(task.status==='IN_PROGRESS'||task.status==='BLOCKED')?<Button loading={workflowBusy} onClick={()=>void workflow('submit')}>Submit for Review</Button>:null}{task.status==='AWAITING_RESPONSE'?<Badge tone="warning">Awaiting Admin Review</Badge>:null}{task.status==='COMPLETED'?<Badge tone="success">Approved / Completed</Badge>:null}</div></div> : task.status==='AWAITING_RESPONSE'?<div className="task-completion-bar"><div><strong>Staff submitted this task</strong><span>Approve it as complete or request a revision.</span></div><div style={{display:'flex',gap:8}}><Button variant="outline" loading={workflowBusy} onClick={()=>void workflow('revision')}>Request Revision</Button><Button loading={workflowBusy} onClick={()=>void workflow('approve')}>Approve & Complete</Button></div></div> : task.status !== "COMPLETED" && task.status !== "CANCELLED" ? <div className="task-completion-bar"><div><strong>Admin task controls</strong><span>You can complete simple work directly, or let the assigned staff use Accept → Start → Submit.</span></div><Button loading={completing} onClick={() => void complete()}>Complete Task</Button></div> : <div className="task-complete-state"><strong>✓ Task completed</strong><span>This task is recorded as completed.</span></div>}
-          </Card>
+      {!staffMode?<AdminControls task={task} busy={busy} control={control} review={review} reviewNote={reviewNote} setReviewNote={setReviewNote}/>:<StaffControls task={task} currentUserId={currentUserId} busy={busy} action={staffAction}/>} 
 
-          {task.task_workflow ? <Card className="workspace-card task-section-card workflow-guide-card">
-            <header><div><span className="eyebrow">Process guide</span><h2>{task.task_workflow.name}</h2><p>{task.task_workflow.description || "Follow the company workflow for this type of work."}</p></div><Badge tone="purple">{task.task_workflow.steps.filter((step)=>step.completed_at).length}/{task.task_workflow.steps.length}</Badge></header>
-            <div className="task-workflow-checklist">{task.task_workflow.steps.map((step)=><button type="button" key={step.id} className={step.completed_at?"task-workflow-step is-complete":"task-workflow-step"} onClick={async()=>{setWorkflowBusy(true);try{await toggleTaskWorkflowStep(taskId,step.id,!step.completed_at,Boolean(staff));await load()}finally{setWorkflowBusy(false)}}} disabled={workflowBusy}><span className="workflow-check">{step.completed_at?"✓":step.position}</span><span><strong>{step.title}</strong>{step.guidance?<small>{step.guidance}</small>:null}{step.requires_evidence?<em>Evidence recommended</em>:null}</span></button>)}</div>
-          </Card> : null}
+      <div className="p26-task-detail-layout">
+        <main className="p26-task-detail-main">
+          {task.task_workflow?<Card className="workspace-card p26-task-section"><header><div><span className="eyebrow">Process guide</span><h2>{task.task_workflow.name}</h2><p>{task.task_workflow.description||'Complete the workflow steps while the task is in progress.'}</p></div><Badge tone="purple">{task.task_workflow.steps.filter(s=>s.completed_at).length}/{task.task_workflow.steps.length}</Badge></header><div className="p26-task-checklist">{task.task_workflow.steps.map(step=><button type="button" key={step.id} className={step.completed_at?'is-complete':''} disabled={busy||task.control_state!=='ACTIVE'||Boolean(staffMode&&task.accepted_by_id&&currentUserId&&task.accepted_by_id!==currentUserId)} onClick={async()=>{setBusy(true);try{await toggleTaskWorkflowStep(taskId,step.id,!step.completed_at,staffMode);await load()}finally{setBusy(false)}}}><span>{step.completed_at?'✓':String(step.position).padStart(2,'0')}</span><div><strong>{step.title}</strong>{step.guidance?<small>{step.guidance}</small>:null}{step.requires_evidence?<em>Evidence expected</em>:null}</div></button>)}</div></Card>:null}
 
-          <Card className="workspace-card task-section-card">
-            <header><div><span className="eyebrow">CRM context</span><h2>Related work</h2><p>Records connected to this task.</p></div></header>
-            {generated && task.lead_assignment_batch ? <div className="task-assignment-context"><div className="task-related-primary"><div><span>Assignment</span><Link href={`/assignments/${task.lead_assignment_batch.id}`}>{task.lead_assignment_batch.title}</Link></div><Badge tone="purple">{assignmentItems.length} {assignmentItems.length === 1 ? "Lead" : "Leads"}</Badge></div><div className="task-related-leads">{assignmentItems.map((item) => <Link key={item.id} href={staff ? `/my-work/leads/${item.lead_id}` : `/leads/${item.lead_id}`} className="task-related-record"><div><strong>{item.organization_name}</strong><span>Lead · {pretty(item.stage)} · {item.pursuit_progress}% pursuit</span></div><span aria-hidden="true">→</span></Link>)}</div></div> : directRelated ? <div className="task-related-grid">{task.organization_name ? <div><span>Organization</span><strong>{task.organization_name}</strong></div> : null}{task.lead_id ? <div><span>Lead</span><Link href={staff ? `/my-work/leads/${task.lead_id}` : `/leads/${task.lead_id}`}>{task.lead_title || "Open Lead"}</Link></div> : null}{task.contact_id ? <div><span>Contact</span><strong>{person(task.contact_first_name, task.contact_last_name)}</strong></div> : null}</div> : <div className="task-empty-context"><strong>General task</strong><p>This task is not currently linked to a CRM record.</p></div>}
-          </Card>
+          <Card className="workspace-card p26-task-section"><header><div><span className="eyebrow">CRM context</span><h2>Related work</h2></div></header>{task.lead_id||task.organization_name||task.contact_id?<div className="p26-task-context-grid">{task.organization_name?<div><span>Organization</span><strong>{task.organization_name}</strong></div>:null}{task.lead_id?<div><span>Lead</span><Link href={staffMode?`/my-work/leads/${task.lead_id}`:`/leads/${task.lead_id}`}>{task.lead_title||'Open Lead'} →</Link></div>:null}{task.contact_id?<div><span>Contact</span><strong>{person(task.contact_first_name,task.contact_last_name)}</strong></div>:null}</div>:<div className="task-empty-context"><strong>General company task</strong><p>This work is not tied to a CRM record.</p></div>}</Card>
 
-          {generated ? <Card className="workspace-card task-managed-card"><div className="task-managed-icon">↳</div><div><span className="eyebrow">Assignment managed</span><h2>Task structure is protected</h2><p>This task was generated by a Lead assignment. Edit and Delete are intentionally disabled here so the assignment, Lead ownership and operational history remain consistent.</p>{task.lead_assignment_batch ? <Link href={`/assignments/${task.lead_assignment_batch.id}`} className="assignment-link">Open assignment →</Link> : null}</div></Card> : null}
+          <Card className="workspace-card p26-task-section"><header><div><span className="eyebrow">Supporting files</span><h2>Attachments</h2><p>Keep briefs, evidence and delivery files with the task.</p></div><label className="ui-button ui-button--outline ui-button--sm">{uploading?'Uploading…':'+ Add file'}<input type="file" hidden disabled={uploading} onChange={upload}/></label></header>{task.attachments.length?<div className="p26-task-file-grid">{task.attachments.map(file=><article key={file.id}><span>▤</span><div><strong>{file.file_name}</strong><small>{[fileSize(file.file_size),formatDate(file.created_at)].filter(Boolean).join(' · ')}</small></div></article>)}</div>:<div className="task-empty-context"><strong>No attachments yet</strong><p>Upload supporting documents when needed.</p></div>}</Card>
         </main>
 
-        <aside className="task-detail-side">
-          <Card className="workspace-card task-section-card task-timeline-card"><header><div><span className="eyebrow">History</span><h2>Task timeline</h2></div></header>{task.events.length ? <ol className="task-event-timeline">{task.events.map((event) => <li key={event.id}><span className="task-event-dot" aria-hidden="true"/><div><div className="task-event-head"><strong>{pretty(event.event_type)}</strong><time>{formatDate(event.created_at)}</time></div><p>{event.message || "Task activity recorded."}</p>{event.actor_first_name || event.actor_last_name ? <small>by {person(event.actor_first_name, event.actor_last_name)}</small> : null}</div></li>)}</ol> : <p className="muted">No task events yet.</p>}</Card>
-
-          <Card className="workspace-card task-section-card task-files-card"><header><div><span className="eyebrow">Supporting files</span><h2>Attachments</h2><p>{task.attachments.length ? `${task.attachments.length} file${task.attachments.length === 1 ? "" : "s"} attached` : "Keep relevant work with the task."}</p></div></header>{task.attachments.length ? <div className="task-file-list">{task.attachments.map((file) => <article key={file.id}><div className="task-file-mark">▤</div><div><strong>{file.file_name}</strong><span>{[fileSize(file.file_size), formatDate(file.created_at)].filter(Boolean).join(" · ")}</span></div></article>)}</div> : <div className="task-file-empty"><strong>No attachments yet</strong><span>Add briefs, screenshots, reports or supporting documents.</span></div>}<label className="ui-button ui-button--outline ui-button--sm task-upload">{uploading ? "Uploading…" : "+ Add attachment"}<input type="file" hidden disabled={uploading} onChange={upload} /></label></Card>
-        </aside>
+        <aside className="p26-task-detail-side"><Card className="workspace-card p26-task-section p26-task-timeline"><header><div><span className="eyebrow">History</span><h2>Task timeline</h2></div></header>{task.events.length?<ol>{task.events.map(event=><li key={event.id}><span/><div><strong>{pretty(event.event_type)}</strong><p>{event.message||'Task activity recorded.'}</p><small>{person(event.actor_first_name,event.actor_last_name)} · {formatDate(event.created_at)}</small></div></li>)}</ol>:<p className="ui-help">No task activity yet.</p>}</Card></aside>
       </div>
+      {!staffMode?<EditTaskModal open={editing} task={task} onClose={()=>setEditing(false)} onSaved={async()=>{setEditing(false);await load()}}/>:null}
     </div>
-    {!staff && !generated ? <EditTaskModal open={editing} task={task} onClose={() => setEditing(false)} onSaved={async () => { setEditing(false); await load(); }} /> : null}
   </AppShell>;
 }
 
-function EditTaskModal({ open, task, onClose, onSaved }: { open: boolean; task: TaskDetail; onClose: () => void; onSaved: () => Promise<void> }) {
-  const [title, setTitle] = useState(task.title); const [description, setDescription] = useState(task.description ?? ""); const [priority, setPriority] = useState(task.priority); const [status, setStatus] = useState(task.status); const [dueAt, setDueAt] = useState(task.due_at ? new Date(task.due_at).toISOString().slice(0, 16) : ""); const [saving, setSaving] = useState(false); const [error, setError] = useState<string | null>(null);
-  return <Modal open={open} onClose={onClose} title="Edit task"><form className="task-form" onSubmit={async (event) => { event.preventDefault(); setSaving(true); setError(null); try { await updateTask(task.id, { title: title.trim(), description: description.trim() || null, priority, status, dueAt: dueAt ? new Date(dueAt).toISOString() : null }, false); await onSaved(); } catch (caught) { setError(caught instanceof Error ? caught.message : "Unable to update task."); setSaving(false); } }}>
-    <label className="ui-field"><span className="ui-label">Title *</span><input className="ui-input" value={title} onChange={(e) => setTitle(e.target.value)} /></label><label className="ui-field"><span className="ui-label">Instructions</span><textarea className="ui-input" value={description} onChange={(e) => setDescription(e.target.value)} /></label>
-    <div className="task-form-grid"><label className="ui-field"><span className="ui-label">Priority</span><select className="ui-input" value={priority} onChange={(e) => setPriority(e.target.value)}><option>LOW</option><option>MEDIUM</option><option>HIGH</option><option>URGENT</option></select></label><label className="ui-field"><span className="ui-label">Status</span><select className="ui-input" value={status} onChange={(e) => setStatus(e.target.value)}><option value="TODO">To do</option><option value="IN_PROGRESS">In progress</option><option value="AWAITING_RESPONSE">Awaiting response</option><option value="BLOCKED">Blocked</option><option value="COMPLETED">Completed</option><option value="CANCELLED">Cancelled</option></select></label></div>
-    <label className="ui-field"><span className="ui-label">Due date</span><input className="ui-input" type="datetime-local" value={dueAt} onChange={(e) => setDueAt(e.target.value)} /></label>{error ? <p className="task-form-error">{error}</p> : null}<div className="task-form-actions"><Button type="button" variant="outline" onClick={onClose}>Cancel</Button><Button type="submit" loading={saving}>Save changes</Button></div>
-  </form></Modal>;
+function AdminControls({task,busy,control,review,reviewNote,setReviewNote}:{task:TaskDetail;busy:boolean;control:(a:'PAUSE'|'RESUME'|'CANCEL'|'COMPLETE'|'REOPEN'|'DISPATCH_NOW')=>Promise<void>;review:(d:'APPROVE'|'REVISION')=>Promise<void>;reviewNote:string;setReviewNote:(value:string)=>void}){
+  return <Card className="workspace-card p26-task-control-center"><div><span className="eyebrow">Admin controls</span><h2>Task lifecycle</h2><p>Pause work without losing history, dispatch scheduled work immediately, or close/reopen it when operations change.</p>{task.status==='AWAITING_RESPONSE'?<label className="p26-task-review-note"><span>Review note</span><textarea rows={3} value={reviewNote} onChange={e=>setReviewNote(e.target.value)} placeholder="Optional feedback for approval, or explain what should be revised…"/></label>:null}</div><div className="p26-task-control-actions">{task.status==='AWAITING_RESPONSE'?<><Button variant="outline" loading={busy} onClick={()=>void review('REVISION')}>Request revision</Button><Button loading={busy} onClick={()=>void review('APPROVE')}>Approve & complete</Button></>:null}{task.control_state==='SCHEDULED'?<><Button variant="outline" loading={busy} onClick={()=>void control('CANCEL')}>Cancel</Button><Button loading={busy} onClick={()=>void control('DISPATCH_NOW')}>Dispatch now</Button></>:null}{task.control_state==='ACTIVE'&&!['COMPLETED','CANCELLED'].includes(task.status)&&task.status!=='AWAITING_RESPONSE'?<><Button variant="outline" loading={busy} onClick={()=>void control('PAUSE')}>Pause</Button><Button variant="outline" loading={busy} onClick={()=>void control('CANCEL')}>Cancel</Button><Button loading={busy} onClick={()=>void control('COMPLETE')}>Mark completed</Button></>:null}{task.control_state==='PAUSED'?<><Button variant="outline" loading={busy} onClick={()=>void control('CANCEL')}>Cancel</Button><Button loading={busy} onClick={()=>void control('RESUME')}>Resume task</Button></>:null}{task.status==='COMPLETED'||task.control_state==='CANCELLED'?<Button loading={busy} onClick={()=>void control('REOPEN')}>Reopen task</Button>:null}</div></Card>
 }
+
+function StaffControls({task,currentUserId,busy,action}:{task:TaskDetail;currentUserId:string|null;busy:boolean;action:(a:'accept'|'start'|'submit')=>Promise<void>}){
+  const locked=Boolean(task.accepted_by_id&&currentUserId&&task.accepted_by_id!==currentUserId);
+  return <Card className="workspace-card p26-task-control-center"><div><span className="eyebrow">Your work sequence</span><h2>{task.control_state==='PAUSED'?'Task paused by Admin':task.control_state==='CANCELLED'?'Task cancelled':task.control_state==='ACTIVE'?'Accept → Start → Submit':'Task not available yet'}</h2><p>{task.assignment_type==='TEAM'||task.assignment_type==='DEPARTMENT'?'For shared work, the first eligible staff member to accept becomes the accountable worker.':'Progress your task through the controlled delivery flow.'}</p></div><div className="p26-task-control-actions">{task.control_state==='ACTIVE'&&!task.accepted_at?<Button loading={busy} onClick={()=>void action('accept')}>Accept task</Button>:null}{task.control_state==='ACTIVE'&&!locked&&task.accepted_at&&task.status==='TODO'?<Button loading={busy} onClick={()=>void action('start')}>Start work</Button>:null}{task.control_state==='ACTIVE'&&!locked&&(task.status==='IN_PROGRESS'||task.status==='BLOCKED')?<Button loading={busy} onClick={()=>void action('submit')}>Submit for review</Button>:null}{task.status==='AWAITING_RESPONSE'?<Badge tone="warning">Awaiting Admin review</Badge>:null}{task.status==='COMPLETED'?<Badge tone="success">Completed</Badge>:null}{locked?<Badge tone="neutral">Accepted by another staff member</Badge>:null}</div></Card>
+}
+
+function EditTaskModal({open,task,onClose,onSaved}:{open:boolean;task:TaskDetail;onClose:()=>void;onSaved:()=>Promise<void>}){
+  const [title,setTitle]=useState(task.title);const [description,setDescription]=useState(task.description??'');const [priority,setPriority]=useState(task.priority);const [dueAt,setDueAt]=useState(task.due_at?new Date(task.due_at).toISOString().slice(0,16):'');const [saving,setSaving]=useState(false);const [error,setError]=useState<string|null>(null);
+  return <Modal open={open} onClose={onClose} title="Edit task"><form className="premium-form" onSubmit={async e=>{e.preventDefault();setSaving(true);setError(null);try{await updateTask(task.id,{title,description:description||null,priority,dueAt:dueAt?new Date(dueAt).toISOString():null},false);await onSaved()}catch(x){setError(x instanceof Error?x.message:'Unable to update task');setSaving(false)}}}><label className="ui-field"><span className="ui-label">Title</span><input className="ui-input" value={title} onChange={e=>setTitle(e.target.value)}/></label><label className="ui-field"><span className="ui-label">Instructions</span><textarea className="ui-input" rows={6} value={description} onChange={e=>setDescription(e.target.value)}/></label><div className="task-form-grid"><label className="ui-field"><span className="ui-label">Priority</span><select className="ui-input" value={priority} onChange={e=>setPriority(e.target.value)}><option value="LOW">Low</option><option value="MEDIUM">Medium</option><option value="HIGH">High</option><option value="URGENT">Urgent</option></select></label><label className="ui-field"><span className="ui-label">Due</span><input className="ui-input" type="datetime-local" value={dueAt} onChange={e=>setDueAt(e.target.value)}/></label></div>{error?<p className="task-form-error">{error}</p>:null}<div className="task-form-actions"><Button type="button" variant="outline" onClick={onClose}>Cancel</Button><Button type="submit" loading={saving}>Save changes</Button></div></form></Modal>
+}
+
+function assignmentName(task:TaskDetail){if(task.assignment_type==='TEAM')return task.assigned_team_name||'Team';if(task.assignment_type==='DEPARTMENT')return task.assigned_department_name||'Department';if(task.assignment_type==='STAFF')return person(task.assignee_first_name,task.assignee_last_name);return 'Unassigned'}

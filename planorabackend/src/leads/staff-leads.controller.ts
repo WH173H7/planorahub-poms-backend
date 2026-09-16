@@ -78,7 +78,7 @@ export class StaffLeadsController {
   @Post("leads/:id/stage")
   async stage(
     @Param("id") id: string,
-    @Body() body: { stage: LeadStage; reason?: string | null },
+    @Body() body: { stage: LeadStage; reason?: string | null; expectedRevenue?: number | null },
     @Req() request: AuthenticatedRequest,
     @Headers("user-agent") userAgent?: string,
   ) {
@@ -90,6 +90,7 @@ export class StaffLeadsController {
         this.context(request, userAgent),
         request.user!.id,
         body.reason,
+        body.expectedRevenue,
       ),
     };
   }

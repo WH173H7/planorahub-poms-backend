@@ -13,6 +13,7 @@ import { Progress } from '@/components/ui/progress';
 import { approveProspect, rejectProspect } from '@/lib/delivery/api';
 import {
   addPursuitComment,
+  assignLeadToTeam,
   createAdminRequiredPursuitStep,
   deleteContact,
   getLead,
@@ -21,21 +22,34 @@ import {
   listLeadActivities,
   listLeadContacts,
   markPursuitStepReviewed,
+  publishLeadsToPool,
   reassignLead,
+  removeLeadFromPool,
   requestPursuitRetake,
-  assignLeadToTeam,
-  updateLeadRevenue,
 } from '@/lib/leads/api';
 import { formatDate, organizationLocation, ownerName, priorityLabel, stageLabel } from '@/lib/leads/helpers';
 import type { Activity, AssignmentHistory, Contact, ContactMethod, Lead, Pursuit, PursuitStep } from '@/lib/leads/types';
 import { ContactDialog, methodTypeLabel } from './add-contact-dialog';
 import { ReassignLeadDialog } from './lead-operations-dialogs';
 import { listManagedTeams } from '@/lib/workspace/ops-api';
-import { Input } from '@/components/ui/input';
 import { NativeSelect } from '@/components/ui/native-select';
 import { LeadPriorityPill, LeadStagePill } from './lead-status';
 
 type WorkspaceTab = 'overview' | 'contacts' | 'pursuit' | 'activity';
+
+const money = (value: number | null | undefined) =>
+  new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN', maximumFractionDigits: 0 }).format(Number(value ?? 0));
+
+function routingLabel(lead: Lead) {
+  if (lead.claimed_by_id) {
+    const claimant = [lead.claimed_by_first_name, lead.claimed_by_last_name].filter(Boolean).join(' ');
+    return claimant ? `Self-selected from Lead Pool by ${claimant}` : 'Self-selected from Lead Pool';
+  }
+  if (lead.assigned_team_id) return `Team · ${lead.assigned_team_name || 'Assigned team'}`;
+  if (lead.assigned_to_id) return `Admin assigned · ${ownerName(lead)}`;
+  if (lead.available_in_pool) return 'Available in Lead Pool';
+  return 'Unassigned';
+}
 
 export function LeadWorkspace({ leadId }: { leadId: string }) {
   const [lead, setLead] = useState<Lead | null>(null);
@@ -51,6 +65,7 @@ export function LeadWorkspace({ leadId }: { leadId: string }) {
   const [dialog, setDialog] = useState<'reassign' | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [reviewBusy, setReviewBusy] = useState(false);
+  const [poolBusy, setPoolBusy] = useState(false);
 
   const refreshLead = useCallback(async () => {
     const record = await getLead(leadId);
@@ -79,8 +94,7 @@ export function LeadWorkspace({ leadId }: { leadId: string }) {
     }
   }, [leadId, refreshLead]);
 
-
-  useEffect(() => { Promise.resolve().then(refreshWorkspace); }, [refreshWorkspace]);
+  useEffect(() => { void refreshWorkspace(); }, [refreshWorkspace]);
 
   if (loading) return <AppShell area="admin" title="Lead Workspace" breadcrumb="Sales / Leads"><PageLoadingState /></AppShell>;
   if (error || !lead) return <AppShell area="admin" title="Lead Workspace" breadcrumb="Sales / Leads"><PageErrorState message={error ?? 'Lead not found.'} /></AppShell>;
@@ -91,51 +105,70 @@ export function LeadWorkspace({ leadId }: { leadId: string }) {
     { value: 'pursuit', label: 'Pursuit' },
     { value: 'activity', label: `Timeline (${activities.length})` },
   ];
+  const unassigned = !lead.assigned_to_id && !lead.assigned_team_id;
 
   return (
     <AppShell area="admin" title={lead.organization_name} breadcrumb="Sales / Leads">
-      <div className="lead-workspace">
+      <div className="lead-workspace lead-workspace-polished">
         <Link href="/leads" className="back-link">← Leads</Link>
         {success ? <Alert tone="success">{success}</Alert> : null}
+
         <RecordHeader
           lead={lead}
           actions={<>
             {lead.stage === 'READY_FOR_PROSPECT_REVIEW' ? <>
-              <Button size="sm" variant="outline" disabled={reviewBusy} onClick={async()=>{const reason=window.prompt('Why is this Lead not ready for Prospect conversion? (optional)')??undefined;setReviewBusy(true);try{await rejectProspect(leadId,reason);await refreshWorkspace();setSuccess('Prospect recommendation returned to Engaged for more work.')}finally{setReviewBusy(false)}}}>Return for work</Button>
+              <Button size="sm" variant="outline" disabled={reviewBusy} onClick={async()=>{const reason=window.prompt('Why is this Lead not ready for Prospect conversion? (optional)')??undefined;setReviewBusy(true);try{await rejectProspect(leadId,reason);await refreshWorkspace();setSuccess('Prospect recommendation returned for more Lead work.')}finally{setReviewBusy(false)}}}>Return for work</Button>
               <Button size="sm" loading={reviewBusy} onClick={async()=>{if(!window.confirm(`Approve ${lead.organization_name} as a Prospect?`))return;setReviewBusy(true);try{await approveProspect(leadId);window.location.href='/prospects'}finally{setReviewBusy(false)}}}>Approve Prospect</Button>
             </> : null}
-            {lead.assigned_to_id ? <Button size="sm" variant={lead.stage==='READY_FOR_PROSPECT_REVIEW'?'outline':'primary'} onClick={() => setDialog('reassign')}>Reassign Lead</Button> : null}
+
+            {unassigned && lead.stage === 'NEW' ? (
+              lead.available_in_pool ? (
+                <Button size="sm" variant="outline" loading={poolBusy} onClick={async()=>{setPoolBusy(true);try{await removeLeadFromPool(lead.id);await refreshWorkspace();setSuccess('Lead removed from the Lead Pool.')}finally{setPoolBusy(false)}}}>Remove from Pool</Button>
+              ) : (
+                <Button size="sm" variant="outline" loading={poolBusy} onClick={async()=>{setPoolBusy(true);try{await publishLeadsToPool([lead.id]);await refreshWorkspace();setSuccess('Lead is now available for staff to pick from the Lead Pool.')}finally{setPoolBusy(false)}}}>Send to Lead Pool</Button>
+              )
+            ) : null}
+
+            {lead.stage !== 'READY_FOR_PROSPECT_REVIEW' ? (
+              <Button size="sm" variant="primary" onClick={() => setDialog('reassign')}>
+                {lead.assigned_to_id ? 'Reassign Lead' : 'Assign Lead'}
+              </Button>
+            ) : null}
           </>}
         />
+
+        {lead.stage === 'READY_FOR_PROSPECT_REVIEW' ? (
+          <Card className="prospect-review-gate">
+            <div>
+              <span className="eyebrow">Prospect recommendation</span>
+              <h2>Commercial value begins here.</h2>
+              <p>The staff pursuit is complete enough for Admin review. The expected revenue below was supplied at the final Lead workflow gate and will move into the Prospect record if approved.</p>
+            </div>
+            <div className="prospect-review-value">
+              <span>Expected revenue</span>
+              <strong>{money(lead.expected_revenue)}</strong>
+              <Badge tone="warning">Awaiting Admin review</Badge>
+            </div>
+          </Card>
+        ) : null}
+
         <div className="record-tabs" role="tablist">
           {tabs.map((item) => <button key={item.value} role="tab" aria-selected={tab === item.value} onClick={() => setTab(item.value)}>{item.label}</button>)}
         </div>
-        {tab === 'overview' && <><CommercialOwnership lead={lead} changed={refreshWorkspace}/><Overview lead={lead} /><AssignmentHistoryView history={assignmentHistory}/></>}
+
+        {tab === 'overview' && <>
+          <RoutingControl lead={lead} changed={refreshWorkspace} />
+          <Overview lead={lead} />
+          <AssignmentHistoryView history={assignmentHistory} />
+        </>}
         {tab === 'contacts' && <Contacts contacts={contacts} onAdd={() => { setEditingContact(null); setContactOpen(true); }} onEdit={(contact) => { setEditingContact(contact); setContactOpen(true); }} onDelete={async (contact) => { const name = `${contact.first_name} ${contact.last_name}`.trim(); if (!window.confirm(`Delete ${name}? This will also remove their contact methods.`)) return; await deleteContact(contact.id); setContacts(await listLeadContacts(lead.organization_id)); }} />}
         {tab === 'pursuit' && (
-          <PursuitView
-            leadId={leadId}
-            pursuit={pursuit}
-            onChanged={async (value) => {
-              setPursuit(value);
-              await refreshLead();
-            }}
-          />
+          <PursuitView leadId={leadId} pursuit={pursuit} onChanged={async (value) => { setPursuit(value); await refreshLead(); }} />
         )}
         {tab === 'activity' && <ActivityView activities={activities} />}
-        {contactOpen ? <ContactDialog
-          key={editingContact?.id ?? 'new-contact'}
-          open
-          organizationId={lead.organization_id}
-          contact={editingContact}
-          onClose={() => { setContactOpen(false); setEditingContact(null); }}
-          onSaved={async () => {
-            setContacts(await listLeadContacts(lead.organization_id));
-            setContactOpen(false);
-            setEditingContact(null);
-          }}
-        /> : null}
-        {dialog==='reassign'?<ReassignLeadDialog currentOwnerId={lead.assigned_to_id} currentOwner={ownerName(lead)} onClose={()=>setDialog(null)} onConfirm={async(input)=>{await reassignLead(leadId,input);await refreshWorkspace();setDialog(null);setSuccess('Lead reassigned. Existing pursuit progress and history were preserved.');}}/>:null}
+
+        {contactOpen ? <ContactDialog key={editingContact?.id ?? 'new-contact'} open organizationId={lead.organization_id} contact={editingContact} onClose={() => { setContactOpen(false); setEditingContact(null); }} onSaved={async () => { setContacts(await listLeadContacts(lead.organization_id)); setContactOpen(false); setEditingContact(null); }} /> : null}
+        {dialog==='reassign'?<ReassignLeadDialog currentOwnerId={lead.assigned_to_id} currentOwner={ownerName(lead)} onClose={()=>setDialog(null)} onConfirm={async(input)=>{await reassignLead(leadId,input);await refreshWorkspace();setDialog(null);setSuccess(lead.assigned_to_id?'Lead reassigned. Existing pursuit progress and history were preserved.':'Lead assigned. A pursuit workflow is now available to the owner.');}}/>:null}
       </div>
     </AppShell>
   );
@@ -143,13 +176,23 @@ export function LeadWorkspace({ leadId }: { leadId: string }) {
 
 function RecordHeader({ lead, actions }: { lead: Lead; actions?: ReactNode }) {
   return (
-    <Card className="record-header">
-      <div className="record-title"><div><span className="eyebrow">Organization lead</span><h1>{lead.organization_name}</h1><p>{[lead.industry, organizationLocation(lead)].filter(Boolean).join(' · ') || 'Organization pursuit'}</p></div><div className="record-header-actions"><Badge tone="purple">LEAD</Badge>{actions}</div></div>
-      <div className="record-meta">
+    <Card className="record-header lead-record-header">
+      <div className="record-title">
+        <div>
+          <div className="lead-title-flags">
+            <span className="eyebrow">Organization Lead</span>
+            {lead.claimed_by_id ? <Badge tone="purple">Self-selected · Lead Pool</Badge> : lead.available_in_pool ? <Badge tone="info">Available in Lead Pool</Badge> : null}
+          </div>
+          <h1>{lead.organization_name}</h1>
+          <p>{[lead.industry, organizationLocation(lead)].filter(Boolean).join(' · ') || 'Organization pursuit'}</p>
+        </div>
+        <div className="record-header-actions"><Badge tone="purple">LEAD</Badge>{actions}</div>
+      </div>
+      <div className="record-meta lead-record-meta">
         <HeaderMeta label="Stage"><LeadStagePill stage={lead.stage} /></HeaderMeta>
-        <HeaderMeta label="Owner" value={lead.assigned_team_name?`Team · ${lead.assigned_team_name}`:ownerName(lead)} /><HeaderMeta label="Proposed revenue" value={new Intl.NumberFormat('en-NG',{style:'currency',currency:'NGN',maximumFractionDigits:0}).format(Number(lead.proposed_revenue||0))} /><HeaderMeta label="Weighted pipeline" value={new Intl.NumberFormat('en-NG',{style:'currency',currency:'NGN',maximumFractionDigits:0}).format(Number(lead.weighted_revenue||0))} />
+        <HeaderMeta label="Routing" value={routingLabel(lead)} />
         <HeaderMeta label="Priority"><LeadPriorityPill priority={lead.priority} /></HeaderMeta>
-        <HeaderMeta label="Progress"><span>{lead.pursuit_progress}%</span><Progress value={lead.pursuit_progress} /></HeaderMeta>
+        <HeaderMeta label="Pursuit progress"><span>{lead.pursuit_progress}%</span><Progress value={lead.pursuit_progress} /></HeaderMeta>
         <HeaderMeta label="Next follow-up" value={lead.next_follow_up_at ? formatDate(lead.next_follow_up_at) : '—'} />
         <HeaderMeta label="Assignment">{lead.current_assignment_batch_id?<Link className="assignment-link" href={`/assignments/${lead.current_assignment_batch_id}`}>{lead.current_assignment_title||'View assignment'} →</Link>:(lead.current_assignment_title||'—')}</HeaderMeta>
       </div>
@@ -161,21 +204,68 @@ function HeaderMeta({ label, value, children }: { label: string; value?: string;
   return <div><span className="record-meta-label">{label}</span><div className="record-meta-value">{children ?? value ?? '—'}</div></div>;
 }
 
-function CommercialOwnership({lead,changed}:{lead:Lead;changed:()=>Promise<void>}){const[teams,setTeams]=useState<any[]>([]),[team,setTeam]=useState(lead.assigned_team_id||''),[proposed,setProposed]=useState(String(lead.proposed_revenue||1000000)),[probability,setProbability]=useState(String(lead.revenue_probability||30)),[actual,setActual]=useState(lead.actual_revenue==null?'':String(lead.actual_revenue)),[busy,setBusy]=useState(false);useEffect(()=>{void listManagedTeams().then(setTeams).catch(()=>setTeams([]))},[]);return <Card className="workspace-card"><header><div><h2>Ownership & revenue</h2><p>Assign this opportunity to an individual through Assign/Reassign, or to a cross-department Team. Revenue powers management analytics.</p></div></header><div className="lead-form-grid"><NativeSelect label="Assigned team" value={team} onChange={e=>setTeam(e.target.value)}><option value="">No team ownership</option>{teams.filter(t=>t.is_active).map(t=><option key={t.id} value={t.id}>{t.name}{t.manager_first_name?` · Lead: ${t.manager_first_name} ${t.manager_last_name}`:''}</option>)}</NativeSelect><Input label="Proposed revenue (₦)" type="number" min="0" value={proposed} onChange={e=>setProposed(e.target.value)}/><Input label="Probability (%)" type="number" min="0" max="100" value={probability} onChange={e=>setProbability(e.target.value)}/><Input label="Actual revenue (₦)" type="number" min="0" placeholder="After conversion" value={actual} onChange={e=>setActual(e.target.value)}/></div><div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:14}}><Button variant="outline" loading={busy} onClick={async()=>{setBusy(true);try{await assignLeadToTeam(lead.id,team||null);await changed()}finally{setBusy(false)}}}>Save team ownership</Button><Button loading={busy} onClick={async()=>{setBusy(true);try{await updateLeadRevenue(lead.id,{proposedRevenue:Number(proposed||0),revenueProbability:Number(probability||0),actualRevenue:actual?Number(actual):null});await changed()}finally{setBusy(false)}}}>Save revenue</Button></div></Card>}
+function RoutingControl({ lead, changed }: { lead: Lead; changed: () => Promise<void> }) {
+  const [teams, setTeams] = useState<any[]>([]);
+  const [team, setTeam] = useState(lead.assigned_team_id || '');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { void listManagedTeams().then(setTeams).catch(() => setTeams([])); }, []);
+  useEffect(() => { setTeam(lead.assigned_team_id || ''); }, [lead.assigned_team_id]);
+
+  return (
+    <Card className="workspace-card lead-routing-card">
+      <header>
+        <div>
+          <span className="eyebrow">Routing & ownership</span>
+          <h2>Decide who works this Lead.</h2>
+          <p>Admin can assign an individual, route the Lead to a Team, or publish an unassigned New Lead to the Lead Pool for staff self-selection.</p>
+        </div>
+        <Badge tone={lead.claimed_by_id ? 'purple' : lead.available_in_pool ? 'info' : lead.assigned_to_id || lead.assigned_team_id ? 'success' : 'neutral'}>{routingLabel(lead)}</Badge>
+      </header>
+      <div className="lead-routing-control-grid">
+        <div className="lead-routing-current">
+          <span>Current route</span>
+          <strong>{routingLabel(lead)}</strong>
+          {lead.claimed_at ? <small>Picked {formatDate(lead.claimed_at)}</small> : lead.pool_published_at && lead.available_in_pool ? <small>Published {formatDate(lead.pool_published_at)}</small> : null}
+        </div>
+        <div className="lead-routing-team-control">
+          <NativeSelect label="Route to a Team" value={team} onChange={(event) => setTeam(event.target.value)}>
+            <option value="">No team ownership</option>
+            {teams.filter((item) => item.is_active).map((item) => <option key={item.id} value={item.id}>{item.name}{item.manager_first_name ? ` · Lead: ${item.manager_first_name} ${item.manager_last_name}` : ''}</option>)}
+          </NativeSelect>
+          <Button variant="outline" loading={busy} onClick={async()=>{setBusy(true);try{await assignLeadToTeam(lead.id,team||null);await changed();}finally{setBusy(false);}}}>Update team route</Button>
+        </div>
+      </div>
+    </Card>
+  );
+}
 
 function Overview({ lead }: { lead: Lead }) {
   const fields: Array<[string, ReactNode]> = [
-    ['Organization', lead.organization_name], ['Lifecycle', 'LEAD'], ['Stage', stageLabel(lead.stage)],
-    ['Priority', priorityLabel(lead.priority)], ['Owner', lead.assigned_team_name?`Team · ${lead.assigned_team_name}`:ownerName(lead)], ['Proposed revenue', new Intl.NumberFormat('en-NG',{style:'currency',currency:'NGN',maximumFractionDigits:0}).format(Number(lead.proposed_revenue||0))], ['Revenue probability', `${lead.revenue_probability||0}%`], ['Weighted pipeline', new Intl.NumberFormat('en-NG',{style:'currency',currency:'NGN',maximumFractionDigits:0}).format(Number(lead.weighted_revenue||0))], ['Actual revenue', lead.actual_revenue?new Intl.NumberFormat('en-NG',{style:'currency',currency:'NGN',maximumFractionDigits:0}).format(Number(lead.actual_revenue)):'—'], ['Pursuit progress', `${lead.pursuit_progress}%`],
-    ['Assignment', lead.current_assignment_batch_id?<Link className="assignment-link" href={`/assignments/${lead.current_assignment_batch_id}`}>{lead.current_assignment_title||'View assignment'} →</Link>:(lead.current_assignment_title||'—')], ['Assignment deadline', lead.current_assignment_due_at ? formatDate(lead.current_assignment_due_at) : '—'],
-    ['Website', lead.organization_website], ['Industry', lead.industry], ['Organization email', lead.organization_email],
-    ['Organization phone', lead.organization_phone], ['Location', organizationLocation(lead)], ['Source', lead.source],
-    ['Created', formatDate(lead.created_at)], ['Next action', lead.next_action],
+    ['Organization', lead.organization_name],
+    ['Lifecycle', 'LEAD'],
+    ['Stage', stageLabel(lead.stage)],
+    ['Priority', priorityLabel(lead.priority)],
+    ['Routing', routingLabel(lead)],
+    ['Pursuit progress', `${lead.pursuit_progress}%`],
+    ['Assignment', lead.current_assignment_batch_id?<Link className="assignment-link" href={`/assignments/${lead.current_assignment_batch_id}`}>{lead.current_assignment_title||'View assignment'} →</Link>:(lead.current_assignment_title||'—')],
+    ['Assignment deadline', lead.current_assignment_due_at ? formatDate(lead.current_assignment_due_at) : '—'],
+    ['Website', lead.organization_website],
+    ['Industry', lead.industry],
+    ['Organization email', lead.organization_email],
+    ['Organization phone', lead.organization_phone],
+    ['Location', organizationLocation(lead)],
+    ['Source', lead.source],
+    ['Created', formatDate(lead.created_at)],
+    ['Next action', lead.next_action],
     ['Next follow-up', lead.next_follow_up_at ? formatDate(lead.next_follow_up_at) : null],
   ];
-  return <Card className="workspace-card"><header><div><h2>Lead overview</h2><p>Current organization and pursuit information.</p></div></header><dl className="detail-grid">{fields.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value || '—'}</dd></div>)}</dl></Card>;
+  return (
+    <Card className="workspace-card lead-overview-card">
+      <header><div><span className="eyebrow">Lead profile</span><h2>Organization & pursuit context</h2><p>Keep Lead work focused on research, contact quality, ownership, pursuit progress and next actions. Financial value starts at Prospect Review.</p></div></header>
+      <dl className="detail-grid">{fields.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value || '—'}</dd></div>)}</dl>
+    </Card>
+  );
 }
-
 
 function PursuitView({
   leadId,
