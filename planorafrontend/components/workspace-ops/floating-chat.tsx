@@ -285,7 +285,7 @@ export function FloatingChat(){
             <header className="ph-messenger-conversation-head">
               <button className="ph-messenger-mobile-back" type="button" onClick={()=>setSelection(null)}>←</button>
               <span className="ph-messenger-head-avatar">{selection.kind==='DIRECT'?(contact?`${contact.first_name[0]}${contact.last_name[0]}`:'DM'):channelIcon[channelGroup(channel?.channel_type)]}</span>
-              <div><strong>{selection.kind==='DIRECT'?`${contact?.first_name||''} ${contact?.last_name||''}`.trim():channel?.name.replace(/^Team · |^Department · /,'')}</strong><small>{selection.kind==='DIRECT'?(contact?.job_title||'Staff member'):(channel?`${channelLabel(channel.channel_type)} · ${channel.member_count||0} members`:'')}</small></div>
+              <div><strong>{selection.kind==='DIRECT'?`${contact?.first_name||''} ${contact?.last_name||''}`.trim():channel?.name.replace(/^Team · |^Department · /,'')}</strong><small>{selection.kind==='DIRECT'?(contact?.role_code==='SUPER_ADMIN'?'Super Admin':contact?.job_title||contact?.role_name||'Staff member'):(channel?`${channelLabel(channel.channel_type)} · ${channel.member_count||0} members`:'')}</small></div>
               <span className="ph-messenger-live">● Live</span>
             </header>
 

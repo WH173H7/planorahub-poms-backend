@@ -238,6 +238,143 @@ export class AdminDirectoryService {
     );
   }
 
+
+  async getRoleOverview(id: string) {
+    const role = await this.getRoleById(id);
+    if (!role) {
+      throw new NotFoundException('Role not found');
+    }
+
+    const [staff, departments, associations, activity] = await Promise.all([
+      this.db.query(
+        `SELECT u.id,u.first_name,u.last_name,u.email,u.job_title,u.status,d.name department_name
+         FROM users u
+         LEFT JOIN departments d ON d.id=u.department_id
+         WHERE u.role_id=$1 AND u.status<>'DISABLED'
+         ORDER BY CASE WHEN u.status='ACTIVE' THEN 0 ELSE 1 END,u.first_name,u.last_name`,
+        [id],
+      ),
+      this.db.query(
+        `SELECT d.id,d.name,d.description,COALESCE(d.is_active,TRUE) is_active
+         FROM role_departments rd
+         JOIN departments d ON d.id=rd.department_id
+         WHERE rd.role_id=$1
+         ORDER BY d.name`,
+        [id],
+      ),
+      this.db.query(
+        `SELECT
+          (SELECT COUNT(*)::int FROM task_workflows WHERE role_id=$1) workflows,
+          (SELECT COUNT(*)::int FROM shared_item_access WHERE subject_type='ROLE' AND subject_id=$1) shared_items,
+          (SELECT COUNT(*)::int FROM letter_approval_exemptions WHERE subject_type='ROLE' AND subject_id=$1) letter_exemptions`,
+        [id],
+      ),
+      this.db.query(
+        `SELECT al.id,al.action,al.module,al.entity_type,al.entity_id,al.created_at,u.first_name,u.last_name
+         FROM audit_logs al
+         LEFT JOIN users u ON u.id=al.actor_user_id
+         WHERE al.actor_user_id IN(SELECT id FROM users WHERE role_id=$1)
+            OR (al.entity_type='role' AND al.entity_id=$1)
+         ORDER BY al.created_at DESC
+         LIMIT 16`,
+        [id],
+      ),
+    ]);
+
+    return {
+      role,
+      staff: staff.rows,
+      departments: departments.rows,
+      associations: associations.rows[0],
+      activity: activity.rows,
+    };
+  }
+
+  async deleteRole(id: string, reassignRoleId: string | null) {
+    const existing = await this.getRoleById(id);
+    if (!existing) {
+      throw new NotFoundException('Role not found');
+    }
+    if (existing.is_system_role || existing.code === 'MARKETING' || existing.code === 'SUPER_ADMIN') {
+      throw new BadRequestException('Built-in and system roles cannot be deleted');
+    }
+    if (reassignRoleId === id) {
+      throw new BadRequestException('Choose a different replacement role');
+    }
+
+    if (reassignRoleId) {
+      const replacement = await this.getRoleById(reassignRoleId);
+      if (!replacement || replacement.is_active === false) {
+        throw new BadRequestException('Replacement role must be active');
+      }
+    }
+
+    const dependencies = (
+      await this.db.query(
+        `SELECT
+          (SELECT COUNT(*)::int FROM users WHERE role_id=$1 AND status<>'DISABLED') staff,
+          (SELECT COUNT(*)::int FROM task_workflows WHERE role_id=$1) workflows`,
+        [id],
+      )
+    ).rows[0];
+
+    if ((dependencies.staff || dependencies.workflows) && !reassignRoleId) {
+      throw new BadRequestException('Choose an active replacement role before deleting this role');
+    }
+
+    const client = await this.db.getClient();
+    try {
+      await client.query('BEGIN');
+      await client.query(`UPDATE users SET role_id=$2,updated_at=NOW() WHERE role_id=$1`, [id, reassignRoleId]);
+      await client.query(`UPDATE task_workflows SET role_id=$2 WHERE role_id=$1`, [id, reassignRoleId]);
+
+      if (reassignRoleId) {
+        await client.query(
+          `DELETE FROM shared_item_access old
+           WHERE old.subject_type='ROLE' AND old.subject_id=$1
+             AND EXISTS(
+               SELECT 1 FROM shared_item_access dup
+               WHERE dup.item_type=old.item_type
+                 AND dup.item_id=old.item_id
+                 AND dup.subject_type='ROLE'
+                 AND dup.subject_id=$2
+             )`,
+          [id, reassignRoleId],
+        );
+        await client.query(
+          `UPDATE shared_item_access SET subject_id=$2 WHERE subject_type='ROLE' AND subject_id=$1`,
+          [id, reassignRoleId],
+        );
+        await client.query(
+          `DELETE FROM letter_approval_exemptions old
+           WHERE old.subject_type='ROLE' AND old.subject_id=$1
+             AND EXISTS(
+               SELECT 1 FROM letter_approval_exemptions dup
+               WHERE dup.subject_type='ROLE' AND dup.subject_id=$2
+             )`,
+          [id, reassignRoleId],
+        );
+        await client.query(
+          `UPDATE letter_approval_exemptions SET subject_id=$2 WHERE subject_type='ROLE' AND subject_id=$1`,
+          [id, reassignRoleId],
+        );
+      } else {
+        await client.query(`DELETE FROM shared_item_access WHERE subject_type='ROLE' AND subject_id=$1`, [id]);
+        await client.query(`DELETE FROM letter_approval_exemptions WHERE subject_type='ROLE' AND subject_id=$1`, [id]);
+      }
+
+      await client.query(`DELETE FROM roles WHERE id=$1`, [id]);
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    return { id, reassignedToRoleId: reassignRoleId };
+  }
+
   async getPermissions() {
     const result = await this.db.query(
       `

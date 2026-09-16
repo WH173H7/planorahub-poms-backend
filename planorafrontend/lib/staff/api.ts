@@ -43,6 +43,24 @@ export type Staff = {
 export type Department = { id: string; name: string; description: string | null };
 export type MailDelivery = { status: 'SENT' | 'FAILED' | 'SKIPPED'; id?: string; message: string };
 
+export type DirectMessageAccessOption = {
+  id: string;
+  first_name: string;
+  last_name: string;
+  email: string;
+  job_title: string | null;
+  role_name: string;
+  role_code: string;
+  department_name: string | null;
+  granted: boolean;
+};
+
+export type DirectMessageAccess = {
+  userId: string;
+  selectedUserIds: string[];
+  options: DirectMessageAccessOption[];
+};
+
 export async function listStaff() {
   return (await apiFetch<R<Staff[]>>('/admin/staff')).data;
 }
@@ -87,6 +105,17 @@ export async function updateRole(id: string, input: { name?: string; description
   })).data;
 }
 
+export async function getRoleOverview(id: string) {
+  return (await apiFetch<R<Record<string, any>>>(`/admin/roles/${id}/overview`)).data;
+}
+
+export async function deleteRole(id: string, reassignRoleId?: string | null) {
+  return (await apiFetch<R<{ id: string; reassignedToRoleId: string | null }>>(`/admin/roles/${id}`, {
+    method: 'DELETE',
+    body: JSON.stringify({ reassignRoleId: reassignRoleId || null }),
+  })).data;
+}
+
 export async function listDepartments() {
   return (await apiFetch<R<Department[]>>('/admin/departments')).data;
 }
@@ -111,4 +140,16 @@ export async function listTeams() {
 
 export async function listPermissions() {
   return (await apiFetch<R<Permission[]>>('/admin/permissions')).data;
+}
+
+
+export async function getStaffDirectMessageAccess(id: string) {
+  return (await apiFetch<R<DirectMessageAccess>>(`/admin/staff/${id}/direct-message-access`)).data;
+}
+
+export async function setStaffDirectMessageAccess(id: string, userIds: string[]) {
+  return (await apiFetch<R<DirectMessageAccess>>(`/admin/staff/${id}/direct-message-access`, {
+    method: 'PATCH',
+    body: JSON.stringify({ userIds }),
+  })).data;
 }

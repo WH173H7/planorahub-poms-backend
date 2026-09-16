@@ -34,6 +34,7 @@ import {
 } from '@/lib/workspace/ops-api';
 import { CreateStaffWizard } from './create-staff-wizard';
 import { RoleManagement } from './role-management';
+import { StructureOverviewModal } from './structure-overview-modal';
 
 type Tab = 'STAFF' | 'ROLES' | 'DEPARTMENTS' | 'TEAMS';
 type Department = {
@@ -67,6 +68,11 @@ export function StaffView() {
   const [query, setQuery] = useState('');
   const [openStaff, setOpenStaff] = useState(false);
   const [structure, setStructure] = useState<'DEPARTMENT' | 'TEAM' | null>(null);
+  const [structureOverview, setStructureOverview] = useState<
+    | { kind: 'DEPARTMENT'; id: string; name: string; is_active: boolean }
+    | { kind: 'TEAM'; id: string; name: string; is_active: boolean; manager_id?: string | null }
+    | null
+  >(null);
   const [created, setCreated] = useState<{ name: string; email: string; password: string; emailDelivery: MailDelivery } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -197,9 +203,9 @@ export function StaffView() {
               ) : tab === 'ROLES' ? (
                 <RoleManagement roles={roles} permissions={permissions} onReload={load} />
               ) : tab === 'DEPARTMENTS' ? (
-                <DepartmentView departments={departments} staff={rows} onReload={load} />
+                <DepartmentView departments={departments} staff={rows} onReload={load} onOpenOverview={(department) => setStructureOverview({ kind: 'DEPARTMENT', id: department.id, name: department.name, is_active: department.is_active })} />
               ) : (
-                <TeamView teams={teams} staff={rows} departments={departments} onReload={load} />
+                <TeamView teams={teams} staff={rows} departments={departments} onReload={load} onOpenOverview={(team) => setStructureOverview({ kind: 'TEAM', id: team.id, name: team.name, is_active: team.is_active, manager_id: team.manager_id })} />
               )}
             </div>
           </section>
@@ -212,6 +218,7 @@ export function StaffView() {
           permissions={permissions}
           departments={departments}
           teams={teams}
+          staff={rows}
           onClose={() => setOpenStaff(false)}
           onCreated={async (result) => {
             setCreated(result);
@@ -232,6 +239,16 @@ export function StaffView() {
             setStructure(null);
             await load();
           }}
+        />
+      ) : null}
+
+      {structureOverview ? (
+        <StructureOverviewModal
+          target={structureOverview}
+          departments={departments}
+          teams={teams}
+          onClose={() => setStructureOverview(null)}
+          onChanged={load}
         />
       ) : null}
     </AppShell>
@@ -438,10 +455,12 @@ function DepartmentView({
   departments,
   staff,
   onReload,
+  onOpenOverview,
 }: {
   departments: Department[];
   staff: Staff[];
   onReload: () => Promise<void>;
+  onOpenOverview: (department: Department) => void;
 }) {
   const [editing, setEditing] = useState<Department | null>(null);
 
@@ -475,18 +494,17 @@ function DepartmentView({
                   {departmentStaff.length > 4 ? <small className="ui-help">+ {departmentStaff.length - 4} more staff</small> : null}
                 </div>
                 <div className="structure-card-actions">
+                  <Button size="sm" onClick={() => onOpenOverview(department)}>View details</Button>
                   <Button size="sm" variant="outline" onClick={() => setEditing(department)}>Edit</Button>
                   <Button
                     size="sm"
                     variant="outline"
-                    disabled={department.is_active && departmentStaff.some((member) => member.status === 'ACTIVE')}
-                    title={department.is_active && departmentStaff.some((member) => member.status === 'ACTIVE') ? 'Move or suspend active staff before deactivating this department.' : undefined}
                     onClick={async () => {
                       await patchManagedDepartment(department.id, { isActive: !department.is_active });
                       await onReload();
                     }}
                   >
-                    {department.is_active ? 'Deactivate' : 'Reactivate'}
+                    {department.is_active ? 'Suspend' : 'Reactivate'}
                   </Button>
                 </div>
               </div>
@@ -505,11 +523,13 @@ function TeamView({
   staff,
   departments,
   onReload,
+  onOpenOverview,
 }: {
   teams: Team[];
   staff: Staff[];
   departments: Department[];
   onReload: () => Promise<void>;
+  onOpenOverview: (team: Team) => void;
 }) {
   const [membersTeam, setMembersTeam] = useState<Team | null>(null);
   const [editing, setEditing] = useState<Team | null>(null);
@@ -533,6 +553,7 @@ function TeamView({
                 <span>Lead: <strong>{team.manager_first_name ? `${team.manager_first_name} ${team.manager_last_name}` : 'Not assigned'}</strong></span>
               </div>
               <div className="structure-card-actions">
+                <Button size="sm" onClick={() => onOpenOverview(team)}>View details</Button>
                 <Button size="sm" variant="outline" onClick={() => setMembersTeam(team)}>Members</Button>
                 <Button size="sm" variant="outline" onClick={() => setEditing(team)}>Edit</Button>
                 <Button
@@ -543,7 +564,7 @@ function TeamView({
                     await onReload();
                   }}
                 >
-                  {team.is_active ? 'Deactivate' : 'Reactivate'}
+                  {team.is_active ? 'Suspend' : 'Reactivate'}
                 </Button>
               </div>
             </div>

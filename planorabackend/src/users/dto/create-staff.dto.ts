@@ -19,4 +19,6 @@ export class CreateStaffDto {
   teamIds?: string[];
 
   permissionOverrides?: PermissionOverrideInput[];
+
+  directMessageUserIds?: string[];
 }

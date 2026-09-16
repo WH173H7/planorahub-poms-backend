@@ -1,5 +1,6 @@
-import {Injectable} from '@nestjs/common';
+import {BadRequestException,Injectable} from '@nestjs/common';
 import {DatabaseService} from '../database/database.service.js';
+import {StaffMailService} from '../mailer/staff-mail.service.js';
 
 type ReportFilters={
   from?:string;to?:string;staffId?:string;departmentId?:string;organizationId?:string;
@@ -8,7 +9,7 @@ type ReportFilters={
 
 @Injectable()
 export class ReportsService{
-  constructor(private readonly db:DatabaseService){}
+  constructor(private readonly db:DatabaseService,private readonly mail:StaffMailService){}
 
   async company(filters:ReportFilters={}){
     const leadParams=[filters.from||null,filters.to||null,filters.staffId||null,filters.departmentId||null,filters.organizationId||null,filters.recordType||null,filters.leadStage||null];
@@ -100,6 +101,42 @@ export class ReportsService{
       communications:communications.rows[0]??{outbound_mail:0,inbound_mail:0,letters:0,shared_files:0},
       options,
     };
+  }
+
+  async emailCompanyReport(filters:ReportFilters,recipient:string){
+    const data=await this.company(filters);
+    const csv=this.csv(data);
+    const date=new Date().toISOString().slice(0,10);
+    const filename=`PlanoraHub-management-report-${date}.csv`;
+    const delivery=await this.mail.sendWorkspaceMail({
+      to:[recipient],
+      subject:`PlanoraHub management report · ${date}`,
+      body:`Your requested PlanoraHub management report is attached. The attachment reflects the same filters used when you exported the report from the CRM.`,
+      senderName:'PlanoraHub Reports',
+      attachments:[{filename,content:Buffer.from(csv,'utf8').toString('base64'),contentType:'text/csv; charset=utf-8'}],
+      idempotencyKey:`management-report/${recipient}/${Date.now()}`,
+    });
+    if(delivery.status!=='SENT')throw new BadRequestException(delivery.message);
+    return{recipient,filename,status:delivery.status};
+  }
+
+  private csv(data:any){
+    const rows:string[][]=[
+      ['PlanoraHub Management Report'],
+      ['From',data.range.from||'All'],
+      ['To',data.range.to||'All'],
+      [],
+      ['Commercial'],
+      ['Expected revenue',String(data.commercial.expected_revenue)],
+      ['Realized revenue',String(data.commercial.realized_revenue)],
+      [],
+      ['Staff','Department','Assigned tasks','Completed','Overdue','Active Leads'],
+      ...data.staff.map((x:any)=>[`${x.first_name} ${x.last_name}`,x.department_name||'',String(x.assigned_tasks),String(x.completed_tasks),String(x.overdue_tasks),String(x.active_leads)]),
+      [],
+      ['Organizations','Industry','CRM records','Contacts','Tasks','Overdue'],
+      ...data.organizations.map((x:any)=>[x.name,x.industry||'',String(x.crm_records),String(x.contacts),String(x.tasks),String(x.overdue_tasks)]),
+    ];
+    return rows.map(row=>row.map(value=>`"${String(value).replaceAll('"','""')}"`).join(',')).join('\n');
   }
 
   private async options(){

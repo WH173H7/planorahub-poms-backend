@@ -1,1 +1,1 @@
-import {Module} from '@nestjs/common';import {ReportsController} from './reports.controller.js';import {ReportsService} from './reports.service.js';@Module({controllers:[ReportsController],providers:[ReportsService]})export class ReportsModule{}
+import {Module} from '@nestjs/common';import {ReportsController} from './reports.controller.js';import {ReportsService} from './reports.service.js';import {StaffMailService} from '../mailer/staff-mail.service.js';@Module({controllers:[ReportsController],providers:[ReportsService,StaffMailService]})export class ReportsModule{}

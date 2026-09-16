@@ -13,13 +13,142 @@ export class WorkspaceOpsService{
  async teams(departmentId?:string){return (await this.db.query(`SELECT t.*,d.name department_name,u.first_name manager_first_name,u.last_name manager_last_name,(SELECT COUNT(*)::int FROM team_members tm WHERE tm.team_id=t.id) member_count FROM teams t LEFT JOIN departments d ON d.id=t.department_id LEFT JOIN users u ON u.id=t.manager_id WHERE ($1::uuid IS NULL OR t.department_id=$1) ORDER BY t.is_active DESC,d.name,t.name`,[departmentId||null])).rows}
  async createTeam(b:{name?:string;description?:string;departmentId?:string;managerId?:string|null}){if(!b.name?.trim())throw new BadRequestException('Team name is required');return (await this.db.query(`INSERT INTO teams(name,description,department_id,manager_id) VALUES($1,$2,$3,$4) RETURNING *`,[b.name.trim(),b.description?.trim()||null,b.departmentId||null,b.managerId||null])).rows[0]}
  async setTeam(id:string,b:{name?:string;description?:string;managerId?:string|null;isActive?:boolean}){const r=await this.db.query(`UPDATE teams SET name=COALESCE(NULLIF($2,''),name),description=$3,manager_id=$4,is_active=COALESCE($5,is_active),updated_at=NOW() WHERE id=$1 RETURNING *`,[id,b.name?.trim()||'',b.description?.trim()||null,b.managerId||null,b.isActive??null]);if(!r.rows[0])throw new NotFoundException('Team not found');return r.rows[0]}
+
+ async departmentOverview(id:string){
+  const department=(await this.db.query(`SELECT d.*,(SELECT COUNT(*)::int FROM users u WHERE u.department_id=d.id AND u.status<>'DISABLED') staff_count,(SELECT COUNT(*)::int FROM teams t WHERE t.department_id=d.id) team_count FROM departments d WHERE d.id=$1`,[id])).rows[0];
+  if(!department)throw new NotFoundException('Department not found');
+  const [staff,teams,associations,activity]=await Promise.all([
+   this.db.query(`SELECT u.id,u.first_name,u.last_name,u.email,u.job_title,u.status,r.name role_name FROM users u JOIN roles r ON r.id=u.role_id WHERE u.department_id=$1 AND u.status<>'DISABLED' ORDER BY CASE WHEN u.status='ACTIVE' THEN 0 ELSE 1 END,u.first_name,u.last_name`,[id]),
+   this.db.query(`SELECT t.id,t.name,t.description,t.is_active,t.manager_id,COALESCE(TRIM(m.first_name||' '||m.last_name),'') manager_name,(SELECT COUNT(*)::int FROM team_members tm WHERE tm.team_id=t.id) member_count FROM teams t LEFT JOIN users m ON m.id=t.manager_id WHERE t.department_id=$1 ORDER BY t.is_active DESC,t.name`,[id]),
+   this.db.query(`SELECT
+     (SELECT COUNT(*)::int FROM tasks WHERE assigned_department_id=$1) tasks,
+     (SELECT COUNT(*)::int FROM task_workflows WHERE department_id=$1) workflows,
+     (SELECT COUNT(*)::int FROM shared_item_access WHERE subject_type='DEPARTMENT' AND subject_id=$1) shared_items,
+     (SELECT COUNT(*)::int FROM letter_approval_exemptions WHERE subject_type='DEPARTMENT' AND subject_id=$1) letter_exemptions,
+     (SELECT COUNT(*)::int FROM leads l JOIN users u ON u.id=l.assigned_to_id WHERE u.department_id=$1) owned_crm_records`,[id]),
+   this.db.query(`SELECT al.id,al.action,al.module,al.entity_type,al.entity_id,al.created_at,u.first_name,u.last_name FROM audit_logs al LEFT JOIN users u ON u.id=al.actor_user_id WHERE al.actor_user_id IN(SELECT id FROM users WHERE department_id=$1) OR (al.entity_type='department' AND al.entity_id=$1) ORDER BY al.created_at DESC LIMIT 16`,[id]),
+  ]);
+  return {department,staff:staff.rows,teams:teams.rows,associations:associations.rows[0],activity:activity.rows};
+ }
+ async teamOverview(id:string){
+  const team=(await this.db.query(`SELECT t.*,d.name department_name,m.first_name manager_first_name,m.last_name manager_last_name,(SELECT COUNT(*)::int FROM team_members tm WHERE tm.team_id=t.id) member_count FROM teams t LEFT JOIN departments d ON d.id=t.department_id LEFT JOIN users m ON m.id=t.manager_id WHERE t.id=$1`,[id])).rows[0];
+  if(!team)throw new NotFoundException('Team not found');
+  const [members,associations,activity]=await Promise.all([
+   this.teamMembers(id),
+   this.db.query(`SELECT
+     (SELECT COUNT(*)::int FROM leads WHERE assigned_team_id=$1) crm_records,
+     (SELECT COUNT(*)::int FROM tasks WHERE assigned_team_id=$1) tasks,
+     (SELECT COUNT(*)::int FROM task_workflows WHERE team_id=$1) workflows,
+     (SELECT COUNT(*)::int FROM crm_mail_threads WHERE team_id=$1) mail_threads,
+     (SELECT COUNT(*)::int FROM shared_item_access WHERE subject_type='TEAM' AND subject_id=$1) shared_items,
+     (SELECT COUNT(*)::int FROM letter_approval_exemptions WHERE subject_type='TEAM' AND subject_id=$1) letter_exemptions`,[id]),
+   this.db.query(`SELECT al.id,al.action,al.module,al.entity_type,al.entity_id,al.created_at,u.first_name,u.last_name FROM audit_logs al LEFT JOIN users u ON u.id=al.actor_user_id WHERE al.actor_user_id IN(SELECT user_id FROM team_members WHERE team_id=$1) OR (al.entity_type='team' AND al.entity_id=$1) ORDER BY al.created_at DESC LIMIT 16`,[id]),
+  ]);
+  return {team,members,associations:associations.rows[0],activity:activity.rows};
+ }
+ async deleteDepartmentManaged(id:string,reassignDepartmentId:string|null,actorUserId:string){
+  if(reassignDepartmentId===id)throw new BadRequestException('Choose a different replacement department');
+  const current=(await this.db.query(`SELECT id,name FROM departments WHERE id=$1`,[id])).rows[0];
+  if(!current)throw new NotFoundException('Department not found');
+  if(reassignDepartmentId){
+   const replacement=(await this.db.query(`SELECT id FROM departments WHERE id=$1 AND is_active=true`,[reassignDepartmentId])).rows[0];
+   if(!replacement)throw new BadRequestException('Replacement department must be active');
+  }
+  const dependencies=(await this.db.query(`SELECT
+   (SELECT COUNT(*)::int FROM users WHERE department_id=$1 AND status<>'DISABLED') staff,
+   (SELECT COUNT(*)::int FROM teams WHERE department_id=$1) teams,
+   (SELECT COUNT(*)::int FROM tasks WHERE assigned_department_id=$1) tasks,
+   (SELECT COUNT(*)::int FROM task_workflows WHERE department_id=$1) workflows`,[id])).rows[0];
+  if((dependencies.staff||dependencies.teams||dependencies.tasks||dependencies.workflows)&&!reassignDepartmentId)throw new BadRequestException('Choose an active replacement department before deleting this department');
+  const c=await this.db.getClient();
+  try{
+   await c.query('BEGIN');
+   await c.query(`UPDATE users SET department_id=$2,updated_at=NOW() WHERE department_id=$1`,[id,reassignDepartmentId]);
+   await c.query(`UPDATE teams SET department_id=$2,updated_at=NOW() WHERE department_id=$1`,[id,reassignDepartmentId]);
+   await c.query(`UPDATE tasks SET assigned_department_id=$2 WHERE assigned_department_id=$1`,[id,reassignDepartmentId]);
+   await c.query(`UPDATE task_workflows SET department_id=$2 WHERE department_id=$1`,[id,reassignDepartmentId]);
+   if(reassignDepartmentId){
+    await c.query(`INSERT INTO role_departments(role_id,department_id) SELECT role_id,$2::uuid FROM role_departments WHERE department_id=$1 ON CONFLICT DO NOTHING`,[id,reassignDepartmentId]);
+    await c.query(`DELETE FROM shared_item_access old WHERE old.subject_type='DEPARTMENT' AND old.subject_id=$1 AND EXISTS(SELECT 1 FROM shared_item_access dup WHERE dup.item_type=old.item_type AND dup.item_id=old.item_id AND dup.subject_type='DEPARTMENT' AND dup.subject_id=$2)`,[id,reassignDepartmentId]);
+    await c.query(`UPDATE shared_item_access SET subject_id=$2 WHERE subject_type='DEPARTMENT' AND subject_id=$1`,[id,reassignDepartmentId]);
+    await c.query(`DELETE FROM letter_approval_exemptions old WHERE old.subject_type='DEPARTMENT' AND old.subject_id=$1 AND EXISTS(SELECT 1 FROM letter_approval_exemptions dup WHERE dup.subject_type='DEPARTMENT' AND dup.subject_id=$2)`,[id,reassignDepartmentId]);
+    await c.query(`UPDATE letter_approval_exemptions SET subject_id=$2 WHERE subject_type='DEPARTMENT' AND subject_id=$1`,[id,reassignDepartmentId]);
+   }else{
+    await c.query(`DELETE FROM shared_item_access WHERE subject_type='DEPARTMENT' AND subject_id=$1`,[id]);
+    await c.query(`DELETE FROM letter_approval_exemptions WHERE subject_type='DEPARTMENT' AND subject_id=$1`,[id]);
+   }
+   await c.query(`DELETE FROM role_departments WHERE department_id=$1`,[id]);
+   await c.query(`DELETE FROM departments WHERE id=$1`,[id]);
+   await c.query('COMMIT');
+  }catch(e){await c.query('ROLLBACK');throw e}finally{c.release()}
+  await this.audit.log({actorUserId,action:'DEPARTMENT_DELETED',module:'workforce',entityType:'department',entityId:id,oldValues:{name:current.name},newValues:{reassignedToDepartmentId:reassignDepartmentId}});
+  return {id,reassignedToDepartmentId:reassignDepartmentId};
+ }
+ async deleteTeamManaged(id:string,reassignTeamId:string|null,actorUserId:string){
+  if(reassignTeamId===id)throw new BadRequestException('Choose a different replacement team');
+  const current=(await this.db.query(`SELECT id,name FROM teams WHERE id=$1`,[id])).rows[0];
+  if(!current)throw new NotFoundException('Team not found');
+  if(reassignTeamId){
+   const replacement=(await this.db.query(`SELECT id FROM teams WHERE id=$1 AND is_active=true`,[reassignTeamId])).rows[0];
+   if(!replacement)throw new BadRequestException('Replacement team must be active');
+  }
+  const dependencies=(await this.db.query(`SELECT
+   (SELECT COUNT(*)::int FROM leads WHERE assigned_team_id=$1) crm_records,
+   (SELECT COUNT(*)::int FROM tasks WHERE assigned_team_id=$1) tasks,
+   (SELECT COUNT(*)::int FROM task_workflows WHERE team_id=$1) workflows,
+   (SELECT COUNT(*)::int FROM crm_mail_threads WHERE team_id=$1) mail_threads`,[id])).rows[0];
+  if((dependencies.crm_records||dependencies.tasks||dependencies.workflows||dependencies.mail_threads)&&!reassignTeamId)throw new BadRequestException('Choose an active replacement team before deleting this team');
+  const c=await this.db.getClient();
+  try{
+   await c.query('BEGIN');
+   if(reassignTeamId)await c.query(`INSERT INTO team_members(team_id,user_id) SELECT $2::uuid,user_id FROM team_members WHERE team_id=$1 ON CONFLICT DO NOTHING`,[id,reassignTeamId]);
+   await c.query(`UPDATE leads SET assigned_team_id=$2 WHERE assigned_team_id=$1`,[id,reassignTeamId]);
+   await c.query(`UPDATE tasks SET assigned_team_id=$2 WHERE assigned_team_id=$1`,[id,reassignTeamId]);
+   await c.query(`UPDATE task_workflows SET team_id=$2 WHERE team_id=$1`,[id,reassignTeamId]);
+   await c.query(`UPDATE crm_mail_threads SET team_id=$2 WHERE team_id=$1`,[id,reassignTeamId]);
+   if(reassignTeamId){
+    await c.query(`DELETE FROM shared_item_access old WHERE old.subject_type='TEAM' AND old.subject_id=$1 AND EXISTS(SELECT 1 FROM shared_item_access dup WHERE dup.item_type=old.item_type AND dup.item_id=old.item_id AND dup.subject_type='TEAM' AND dup.subject_id=$2)`,[id,reassignTeamId]);
+    await c.query(`UPDATE shared_item_access SET subject_id=$2 WHERE subject_type='TEAM' AND subject_id=$1`,[id,reassignTeamId]);
+    await c.query(`DELETE FROM letter_approval_exemptions old WHERE old.subject_type='TEAM' AND old.subject_id=$1 AND EXISTS(SELECT 1 FROM letter_approval_exemptions dup WHERE dup.subject_type='TEAM' AND dup.subject_id=$2)`,[id,reassignTeamId]);
+    await c.query(`UPDATE letter_approval_exemptions SET subject_id=$2 WHERE subject_type='TEAM' AND subject_id=$1`,[id,reassignTeamId]);
+   }else{
+    await c.query(`DELETE FROM shared_item_access WHERE subject_type='TEAM' AND subject_id=$1`,[id]);
+    await c.query(`DELETE FROM letter_approval_exemptions WHERE subject_type='TEAM' AND subject_id=$1`,[id]);
+   }
+   await c.query(`DELETE FROM teams WHERE id=$1`,[id]);
+   await c.query('COMMIT');
+  }catch(e){await c.query('ROLLBACK');throw e}finally{c.release()}
+  await this.audit.log({actorUserId,action:'TEAM_DELETED',module:'workforce',entityType:'team',entityId:id,oldValues:{name:current.name},newValues:{reassignedToTeamId:reassignTeamId}});
+  return {id,reassignedToTeamId:reassignTeamId};
+ }
  async notifications(userId:string){return (await this.db.query(`SELECT * FROM notifications WHERE user_id=$1 ORDER BY created_at DESC LIMIT 60`,[userId])).rows}
  async readNotification(userId:string,id:string){const row=(await this.db.query(`UPDATE notifications SET read_at=COALESCE(read_at,NOW()) WHERE id=$1 AND user_id=$2 RETURNING *`,[id,userId])).rows[0]??null;if(row?.broadcast_id)await this.db.query(`UPDATE broadcast_recipients SET read_at=COALESCE(read_at,NOW()) WHERE broadcast_id=$1 AND user_id=$2`,[row.broadcast_id,userId]);return row}
  async readAll(userId:string){await this.db.query(`UPDATE notifications SET read_at=COALESCE(read_at,NOW()) WHERE user_id=$1`,[userId]);await this.db.query(`UPDATE broadcast_recipients SET read_at=COALESCE(read_at,NOW()) WHERE user_id=$1 AND in_app_sent_at IS NOT NULL`,[userId]);return true}
- async directContacts(userId:string,_roleCode:string){await this.db.query(`UPDATE direct_chat_messages m SET delivered_at=COALESCE(delivered_at,NOW()) FROM direct_chat_conversations c WHERE m.conversation_id=c.id AND m.sender_user_id<>$1 AND (c.user_a_id=$1 OR c.user_b_id=$1)`,[userId]);return (await this.db.query(`SELECT u.id,u.first_name,u.last_name,u.job_title,u.role_id,COALESCE(x.unread_count,0)::int unread_count,x.last_message,x.last_message_at FROM users u LEFT JOIN LATERAL (SELECT COUNT(*) FILTER(WHERE m.sender_user_id=u.id AND m.read_at IS NULL)::int unread_count,(ARRAY_AGG(m.body ORDER BY m.created_at DESC))[1] last_message,MAX(m.created_at) last_message_at FROM direct_chat_conversations c JOIN direct_chat_messages m ON m.conversation_id=c.id WHERE (c.user_a_id=$1 AND c.user_b_id=u.id) OR (c.user_b_id=$1 AND c.user_a_id=u.id)) x ON TRUE WHERE u.status='ACTIVE' AND u.id<>$1 ORDER BY x.last_message_at DESC NULLS LAST,u.first_name,u.last_name`,[userId])).rows}
- async conversation(userId:string,otherId:string){const c=await this.ensureConversation(userId,otherId);await this.db.query(`UPDATE direct_chat_messages SET delivered_at=COALESCE(delivered_at,NOW()),read_at=COALESCE(read_at,NOW()) WHERE conversation_id=$1 AND sender_user_id<>$2`,[c.id,userId]);const messages=(await this.db.query(`SELECT m.*,u.first_name,u.last_name,COALESCE(json_agg(json_build_object('id',a.id,'file_name',a.file_name,'mime_type',a.mime_type,'file_size',a.file_size)) FILTER(WHERE a.id IS NOT NULL),'[]') attachments FROM direct_chat_messages m JOIN users u ON u.id=m.sender_user_id LEFT JOIN direct_chat_attachments a ON a.message_id=m.id WHERE m.conversation_id=$1 GROUP BY m.id,u.first_name,u.last_name ORDER BY m.created_at`,[c.id])).rows;return {conversation:c,messages}}
- async send(userId:string,otherId:string,body:string){const text=body?.trim();if(!text)throw new BadRequestException('Message cannot be empty');const c=await this.ensureConversation(userId,otherId);const m=(await this.db.query(`INSERT INTO direct_chat_messages(conversation_id,sender_user_id,body) VALUES($1,$2,$3) RETURNING *`,[c.id,userId,text])).rows[0];await this.db.query(`INSERT INTO notifications(user_id,title,body,kind,href) SELECT $1,'New message',first_name||' sent you a message','CHAT','/home' FROM users WHERE id=$2`,[otherId,userId]);await this.audit.log({actorUserId:userId,action:'CHAT_MESSAGE_SENT',module:'communications',entityType:'direct_chat_message',entityId:String(m.id),newValues:{recipientUserId:otherId}});return m}
- async uploadChat(userId:string,otherId:string,file:any){if(!file)throw new BadRequestException('File is required');if(file.size>10*1024*1024)throw new BadRequestException('File must be 10 MB or smaller');const c=await this.ensureConversation(userId,otherId);const safe=String(file.originalname||'attachment').replace(/[^a-zA-Z0-9._-]/g,'_');const path=`chat/${c.id}/${randomUUID()}-${safe}`;const up=await this.supabase.admin.storage.from('task-attachments').upload(path,file.buffer,{contentType:file.mimetype,upsert:false});if(up.error)throw new BadRequestException('Attachment upload failed');const m=(await this.db.query(`INSERT INTO direct_chat_messages(conversation_id,sender_user_id,body) VALUES($1,$2,$3) RETURNING *`,[c.id,userId,`Shared ${file.originalname}`])).rows[0];await this.db.query(`INSERT INTO direct_chat_attachments(message_id,file_name,mime_type,file_size,storage_path) VALUES($1,$2,$3,$4,$5)`,[m.id,file.originalname,file.mimetype,file.size,path]);await this.db.query(`INSERT INTO notifications(user_id,title,body,kind,href) VALUES($1,'New chat attachment',$2,'CHAT','/home')`,[otherId,file.originalname]);await this.audit.log({actorUserId:userId,action:'CHAT_ATTACHMENT_SENT',module:'communications',entityType:'direct_chat_message',entityId:String(m.id),newValues:{recipientUserId:otherId,fileName:file.originalname,fileSize:file.size}});return m}
+ async directContacts(userId:string,roleCode:string){
+  await this.db.query(`UPDATE direct_chat_messages m SET delivered_at=COALESCE(delivered_at,NOW()) FROM direct_chat_conversations c WHERE m.conversation_id=c.id AND m.sender_user_id<>$1 AND (c.user_a_id=$1 OR c.user_b_id=$1)`,[userId]);
+  return (await this.db.query(`
+    SELECT u.id,u.first_name,u.last_name,u.job_title,u.role_id,r.name AS role_name,r.code AS role_code,COALESCE(x.unread_count,0)::int unread_count,x.last_message,x.last_message_at
+    FROM users u
+    JOIN roles r ON r.id=u.role_id
+    LEFT JOIN LATERAL (
+      SELECT COUNT(*) FILTER(WHERE m.sender_user_id=u.id AND m.read_at IS NULL)::int unread_count,
+             (ARRAY_AGG(m.body ORDER BY m.created_at DESC))[1] last_message,MAX(m.created_at) last_message_at
+      FROM direct_chat_conversations c JOIN direct_chat_messages m ON m.conversation_id=c.id
+      WHERE (c.user_a_id=$1 AND c.user_b_id=u.id) OR (c.user_b_id=$1 AND c.user_a_id=u.id)
+    ) x ON TRUE
+    WHERE u.status='ACTIVE' AND u.id<>$1 AND (
+      $2='SUPER_ADMIN' OR r.code='SUPER_ADMIN' OR EXISTS(
+        SELECT 1 FROM staff_direct_message_grants g
+        WHERE (g.staff_user_id=$1 AND g.allowed_user_id=u.id)
+           OR (g.staff_user_id=u.id AND g.allowed_user_id=$1)
+      )
+    )
+    ORDER BY CASE WHEN r.code='SUPER_ADMIN' THEN 0 ELSE 1 END,x.last_message_at DESC NULLS LAST,u.first_name,u.last_name
+  `,[userId,roleCode])).rows
+ }
+ async conversation(userId:string,otherId:string,roleCode:string){await this.assertDirectAccess(userId,otherId,roleCode);const c=await this.ensureConversation(userId,otherId);await this.db.query(`UPDATE direct_chat_messages SET delivered_at=COALESCE(delivered_at,NOW()),read_at=COALESCE(read_at,NOW()) WHERE conversation_id=$1 AND sender_user_id<>$2`,[c.id,userId]);const messages=(await this.db.query(`SELECT m.*,u.first_name,u.last_name,COALESCE(json_agg(json_build_object('id',a.id,'file_name',a.file_name,'mime_type',a.mime_type,'file_size',a.file_size)) FILTER(WHERE a.id IS NOT NULL),'[]') attachments FROM direct_chat_messages m JOIN users u ON u.id=m.sender_user_id LEFT JOIN direct_chat_attachments a ON a.message_id=m.id WHERE m.conversation_id=$1 GROUP BY m.id,u.first_name,u.last_name ORDER BY m.created_at`,[c.id])).rows;return {conversation:c,messages}}
+ async send(userId:string,otherId:string,body:string,roleCode:string){const text=body?.trim();if(!text)throw new BadRequestException('Message cannot be empty');await this.assertDirectAccess(userId,otherId,roleCode);const c=await this.ensureConversation(userId,otherId);const m=(await this.db.query(`INSERT INTO direct_chat_messages(conversation_id,sender_user_id,body) VALUES($1,$2,$3) RETURNING *`,[c.id,userId,text])).rows[0];await this.db.query(`INSERT INTO notifications(user_id,title,body,kind,href) SELECT $1,'New message',first_name||' sent you a message','CHAT','/home' FROM users WHERE id=$2`,[otherId,userId]);await this.audit.log({actorUserId:userId,action:'CHAT_MESSAGE_SENT',module:'communications',entityType:'direct_chat_message',entityId:String(m.id),newValues:{recipientUserId:otherId}});return m}
+ async uploadChat(userId:string,otherId:string,file:any,roleCode:string){if(!file)throw new BadRequestException('File is required');if(file.size>10*1024*1024)throw new BadRequestException('File must be 10 MB or smaller');await this.assertDirectAccess(userId,otherId,roleCode);const c=await this.ensureConversation(userId,otherId);const safe=String(file.originalname||'attachment').replace(/[^a-zA-Z0-9._-]/g,'_');const path=`chat/${c.id}/${randomUUID()}-${safe}`;const up=await this.supabase.admin.storage.from('task-attachments').upload(path,file.buffer,{contentType:file.mimetype,upsert:false});if(up.error)throw new BadRequestException('Attachment upload failed');const m=(await this.db.query(`INSERT INTO direct_chat_messages(conversation_id,sender_user_id,body) VALUES($1,$2,$3) RETURNING *`,[c.id,userId,`Shared ${file.originalname}`])).rows[0];await this.db.query(`INSERT INTO direct_chat_attachments(message_id,file_name,mime_type,file_size,storage_path) VALUES($1,$2,$3,$4,$5)`,[m.id,file.originalname,file.mimetype,file.size,path]);await this.db.query(`INSERT INTO notifications(user_id,title,body,kind,href) VALUES($1,'New chat attachment',$2,'CHAT','/home')`,[otherId,file.originalname]);await this.audit.log({actorUserId:userId,action:'CHAT_ATTACHMENT_SENT',module:'communications',entityType:'direct_chat_message',entityId:String(m.id),newValues:{recipientUserId:otherId,fileName:file.originalname,fileSize:file.size}});return m}
  async chatAttachment(userId:string,id:string){const r=await this.db.query(`SELECT a.*,c.user_a_id,c.user_b_id FROM direct_chat_attachments a JOIN direct_chat_messages m ON m.id=a.message_id JOIN direct_chat_conversations c ON c.id=m.conversation_id WHERE a.id=$1 AND ($2=c.user_a_id OR $2=c.user_b_id)`,[id,userId]);const a=r.rows[0];if(!a)throw new NotFoundException('Attachment not found');const signed=await this.supabase.admin.storage.from(a.storage_bucket).createSignedUrl(a.storage_path,300);if(signed.error)throw new BadRequestException('Unable to open attachment');return {url:signed.data.signedUrl,fileName:a.file_name,mimeType:a.mime_type}}
  async search(q:string,admin:boolean,userId:string){
   const x=q?.trim();
@@ -318,6 +447,16 @@ export class WorkspaceOpsService{
   if(admin)return true;
   const sql=itemType==='FOLDER'?`SELECT 1 FROM shared_folders f WHERE f.id=$1 AND (f.created_by_id=$2 OR EXISTS(SELECT 1 FROM shared_item_access a LEFT JOIN users me ON me.id=$2 WHERE a.item_type='FOLDER' AND a.item_id=f.id AND a.can_manage=true AND ((a.subject_type='STAFF' AND a.subject_id=$2) OR (a.subject_type='DEPARTMENT' AND a.subject_id=me.department_id) OR (a.subject_type='ROLE' AND a.subject_id=me.role_id) OR (a.subject_type='TEAM' AND EXISTS(SELECT 1 FROM team_members tm WHERE tm.user_id=$2 AND tm.team_id=a.subject_id)))))`:`SELECT 1 FROM shared_files sf JOIN shared_folders f ON f.id=sf.folder_id WHERE sf.id=$1 AND (sf.created_by_id=$2 OR f.created_by_id=$2 OR EXISTS(SELECT 1 FROM shared_item_access a LEFT JOIN users me ON me.id=$2 WHERE a.can_manage=true AND ((a.item_type='FILE' AND a.item_id=sf.id) OR (a.item_type='FOLDER' AND a.item_id=f.id)) AND ((a.subject_type='STAFF' AND a.subject_id=$2) OR (a.subject_type='DEPARTMENT' AND a.subject_id=me.department_id) OR (a.subject_type='ROLE' AND a.subject_id=me.role_id) OR (a.subject_type='TEAM' AND EXISTS(SELECT 1 FROM team_members tm WHERE tm.user_id=$2 AND tm.team_id=a.subject_id)))))`;
   const ok=(await this.db.query(sql,[id,userId])).rowCount;if(!ok)throw new BadRequestException(write?'You cannot change access for this item':'You cannot manage this item');return true
+ }
+
+ private async assertDirectAccess(userId:string,otherId:string,roleCode:string){
+  if(userId===otherId) throw new BadRequestException('You cannot message yourself');
+  const target=(await this.db.query(`SELECT u.id,u.status,r.code AS role_code FROM users u JOIN roles r ON r.id=u.role_id WHERE u.id=$1 LIMIT 1`,[otherId])).rows[0];
+  if(!target||target.status!=='ACTIVE') throw new NotFoundException('User not found');
+  if(roleCode==='SUPER_ADMIN'||target.role_code==='SUPER_ADMIN') return true;
+  const grant=await this.db.query(`SELECT 1 FROM staff_direct_message_grants g WHERE (g.staff_user_id=$1 AND g.allowed_user_id=$2) OR (g.staff_user_id=$2 AND g.allowed_user_id=$1) LIMIT 1`,[userId,otherId]);
+  if(!grant.rowCount) throw new BadRequestException('Direct messaging with this staff member has not been approved by Admin');
+  return true;
  }
 
  private async ensureConversation(a:string,b:string){const users=await this.db.query(`SELECT id FROM users WHERE id=ANY($1::uuid[]) AND status NOT IN('DISABLED')`,[[a,b]]);if(users.rows.length!==2)throw new NotFoundException('User not found');const found=await this.db.query(`SELECT * FROM direct_chat_conversations WHERE LEAST(user_a_id,user_b_id)=LEAST($1::uuid,$2::uuid) AND GREATEST(user_a_id,user_b_id)=GREATEST($1::uuid,$2::uuid) LIMIT 1`,[a,b]);if(found.rows[0])return found.rows[0];return (await this.db.query(`INSERT INTO direct_chat_conversations(user_a_id,user_b_id) VALUES($1,$2) RETURNING *`,[a,b])).rows[0]}

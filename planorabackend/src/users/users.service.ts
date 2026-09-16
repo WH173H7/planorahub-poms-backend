@@ -10,7 +10,7 @@ type Ctx={actorUserId?:string;ipAddress?:string;userAgent?:string};
 type Override={permissionId:string;effect:'ALLOW'|'DENY';reason?:string};
 export type UpdateStaffInput={
   firstName?:string;lastName?:string;email?:string;phone?:string|null;jobTitle?:string|null;
-  roleId?:string;departmentId?:string|null;teamIds?:string[];permissionOverrides?:Override[];
+  roleId?:string;departmentId?:string|null;teamIds?:string[];permissionOverrides?:Override[];directMessageUserIds?:string[];
 };
 
 @Injectable()
@@ -40,6 +40,8 @@ export class UsersService {
     if(!(await this.usersRepository.teamsExist(teamIds))) throw new BadRequestException('One or more teams are invalid');
     const permissionOverrides=dto.permissionOverrides??[];
     await this.validateOverrides(permissionOverrides);
+    const directMessageUserIds=[...new Set(dto.directMessageUserIds??[])];
+    await this.validateDirectMessageTargets(directMessageUserIds);
     const temporaryPassword=this.generateTemporaryPassword();
     const {data,error}=await this.supabase.admin.auth.admin.createUser({
       email,password:temporaryPassword,email_confirm:true,
@@ -54,8 +56,9 @@ export class UsersService {
       });
       await this.usersRepository.addTeamMemberships(staff.id,teamIds);
       await this.usersRepository.addPermissionOverrides(staff.id,permissionOverrides,ctx?.actorUserId);
+      await this.usersRepository.replaceDirectMessageAccess(staff.id,directMessageUserIds,ctx?.actorUserId);
       await this.audit.log({actorUserId:ctx?.actorUserId,action:'STAFF_CREATED',module:'users',entityType:'user',entityId:staff.id,
-        newValues:{firstName:staff.first_name,lastName:staff.last_name,email:staff.email,roleId:staff.role_id,departmentId:staff.department_id,teamIds,permissionOverrides},
+        newValues:{firstName:staff.first_name,lastName:staff.last_name,email:staff.email,roleId:staff.role_id,departmentId:staff.department_id,teamIds,permissionOverrides,directMessageUserIds},
         ipAddress:ctx?.ipAddress,userAgent:ctx?.userAgent});
       const profile:any=await this.getStaff(staff.id);
       const emailDelivery=await this.mail.sendWelcome({
@@ -88,6 +91,7 @@ export class UsersService {
     const teamIds=input.teamIds===undefined?undefined:[...new Set(input.teamIds)];
     if(teamIds && !(await this.usersRepository.teamsExist(teamIds))) throw new BadRequestException('One or more teams are invalid');
     if(input.permissionOverrides) await this.validateOverrides(input.permissionOverrides);
+    if(input.directMessageUserIds) await this.validateDirectMessageTargets([...new Set(input.directMessageUserIds)]);
     const oldRole=await this.usersRepository.getRole(current.role_id);
     if(oldRole?.code==='SUPER_ADMIN' && role.code!=='SUPER_ADMIN') await this.protectLastSuperAdmin();
 
@@ -112,9 +116,10 @@ export class UsersService {
     });
     if(teamIds) await this.usersRepository.replaceTeamMemberships(id,teamIds);
     if(input.permissionOverrides) await this.usersRepository.replacePermissionOverrides(id,input.permissionOverrides,ctx?.actorUserId);
+    if(input.directMessageUserIds) await this.usersRepository.replaceDirectMessageAccess(id,[...new Set(input.directMessageUserIds)],ctx?.actorUserId);
     await this.audit.log({actorUserId:ctx?.actorUserId,action:'STAFF_UPDATED',module:'users',entityType:'user',entityId:id,
       oldValues:{firstName:current.first_name,lastName:current.last_name,email:current.email,roleId:current.role_id,departmentId:current.department_id},
-      newValues:{firstName:updated.first_name,lastName:updated.last_name,email:updated.email,roleId:updated.role_id,departmentId:updated.department_id,...(teamIds?{teamIds}:{}),...(input.permissionOverrides?{permissionOverrides:input.permissionOverrides}:{})},
+      newValues:{firstName:updated.first_name,lastName:updated.last_name,email:updated.email,roleId:updated.role_id,departmentId:updated.department_id,...(teamIds?{teamIds}:{}),...(input.permissionOverrides?{permissionOverrides:input.permissionOverrides}:{}),...(input.directMessageUserIds?{directMessageUserIds:input.directMessageUserIds}:{})},
       ipAddress:ctx?.ipAddress,userAgent:ctx?.userAgent});
     return this.getStaff(id);
   }
@@ -204,6 +209,26 @@ export class UsersService {
   }
   private async requireStaff(id:string){const s=await this.usersRepository.findById(id);if(!s) throw new NotFoundException('Staff member not found');return s;}
   private async protectLastSuperAdmin(){if((await this.usersRepository.countEnabledSuperAdmins())<=1) throw new BadRequestException('The last enabled Super Admin cannot be suspended, disabled or moved to another role');}
+  async getDirectMessageAccess(id:string){
+    await this.requireStaff(id);
+    return this.usersRepository.getDirectMessageAccess(id);
+  }
+
+  async setDirectMessageAccess(id:string,userIds:string[],ctx?:Ctx){
+    await this.requireStaff(id);
+    const unique=[...new Set(userIds??[])];
+    if(unique.includes(id)) throw new BadRequestException('A staff member cannot be granted direct-message access to themselves');
+    await this.validateDirectMessageTargets(unique);
+    await this.usersRepository.replaceDirectMessageAccess(id,unique,ctx?.actorUserId);
+    await this.audit.log({actorUserId:ctx?.actorUserId,action:'STAFF_DIRECT_MESSAGE_ACCESS_UPDATED',module:'users',entityType:'user',entityId:id,newValues:{directMessageUserIds:unique},ipAddress:ctx?.ipAddress,userAgent:ctx?.userAgent});
+    return this.usersRepository.getDirectMessageAccess(id);
+  }
+
+  private async validateDirectMessageTargets(ids:string[]){
+    if(!ids.length) return;
+    if(!(await this.usersRepository.directMessageTargetsExist(ids))) throw new BadRequestException('One or more direct-message contacts are invalid');
+  }
+
   private async validateOverrides(items:Override[]){const ids=[...new Set(items.map(x=>x.permissionId))];if(!(await this.usersRepository.permissionsExist(ids))) throw new BadRequestException('One or more permission overrides are invalid');if(items.some(x=>!['ALLOW','DENY'].includes(x.effect))) throw new BadRequestException('Invalid permission override effect');}
   private clean(v:string|null){return v===null?null:v.trim()||null;}
   private generateTemporaryPassword(){return `POMS-${randomBytes(9).toString('base64url')}!`;}

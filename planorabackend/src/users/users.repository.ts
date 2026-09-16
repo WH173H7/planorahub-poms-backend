@@ -205,6 +205,41 @@ export class UsersRepository {
     return r.rows.length===new Set(ids).size;
   }
 
+  async directMessageTargetsExist(ids:string[]){
+    if(!ids.length) return true;
+    const r=await this.db.query(`SELECT u.id FROM users u JOIN roles r ON r.id=u.role_id WHERE u.id=ANY($1::uuid[]) AND u.status='ACTIVE' AND r.code<>'SUPER_ADMIN'`,[ids]);
+    return r.rows.length===new Set(ids).size;
+  }
+
+  async getDirectMessageAccess(userId:string){
+    const options=await this.db.query(`
+      SELECT u.id,u.first_name,u.last_name,u.email,u.job_title,r.name AS role_name,r.code AS role_code,d.name AS department_name,
+             EXISTS(SELECT 1 FROM staff_direct_message_grants g WHERE g.staff_user_id=$1 AND g.allowed_user_id=u.id) AS granted
+      FROM users u
+      JOIN roles r ON r.id=u.role_id
+      LEFT JOIN departments d ON d.id=u.department_id
+      WHERE u.id<>$1 AND u.status='ACTIVE' AND r.code<>'SUPER_ADMIN'
+      ORDER BY d.name NULLS LAST,u.first_name,u.last_name
+    `,[userId]);
+    return {
+      userId,
+      selectedUserIds: options.rows.filter((row:any)=>row.granted).map((row:any)=>row.id),
+      options: options.rows,
+    };
+  }
+
+  async replaceDirectMessageAccess(userId:string,userIds:string[],grantedById?:string){
+    const client=await this.db.getClient();
+    try{
+      await client.query('BEGIN');
+      await client.query(`DELETE FROM staff_direct_message_grants WHERE staff_user_id=$1`,[userId]);
+      for(const allowedId of userIds){
+        await client.query(`INSERT INTO staff_direct_message_grants(staff_user_id,allowed_user_id,granted_by_id) VALUES($1,$2,$3) ON CONFLICT(staff_user_id,allowed_user_id) DO UPDATE SET granted_by_id=EXCLUDED.granted_by_id,updated_at=NOW()`,[userId,allowedId,grantedById??null]);
+      }
+      await client.query('COMMIT');
+    }catch(error){await client.query('ROLLBACK');throw error}finally{client.release()}
+  }
+
   async createStaff(p:any){
     const r=await this.db.query(`
       INSERT INTO users(auth_user_id,first_name,last_name,email,phone,job_title,role_id,department_id,status,must_change_password,created_by_id)

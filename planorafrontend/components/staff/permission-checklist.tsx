@@ -66,15 +66,15 @@ export function PermissionChecklist({
   const totalModules = new Set(permissions.map((permission) => permission.module?.trim() || 'general')).size;
 
   return (
-    <div className="permission-browser-v4">
-      <div className="permission-browser-v4__summary">
+    <div className="permission-browser-v6">
+      <div className="permission-browser-v6__summary">
         <div><span>Available</span><strong>{permissions.length}</strong><small>permissions</small></div>
         <div><span>Selected</span><strong>{selectedIds.length}</strong><small>effective access</small></div>
         <div><span>Modules</span><strong>{totalModules}</strong><small>access areas</small></div>
       </div>
 
-      <div className="permission-browser-v4__toolbar">
-        <label className="permission-browser-v4__search">
+      <div className="permission-browser-v6__toolbar">
+        <label className="permission-browser-v6__search">
           <span aria-hidden="true">⌕</span>
           <input
             value={query}
@@ -85,7 +85,7 @@ export function PermissionChecklist({
         </label>
         <button
           type="button"
-          className={selectedOnly ? 'permission-browser-v4__filter is-active' : 'permission-browser-v4__filter'}
+          className={selectedOnly ? 'permission-browser-v6__filter is-active' : 'permission-browser-v6__filter'}
           onClick={() => setSelectedOnly((value) => !value)}
           aria-pressed={selectedOnly}
         >
@@ -93,38 +93,39 @@ export function PermissionChecklist({
         </button>
       </div>
 
-      <div className="permission-browser-v4__meta">
+      <div className="permission-browser-v6__meta">
         <span>{visibleCount} permission{visibleCount === 1 ? '' : 's'} shown</span>
-        <span>Open a module to review its access.</span>
+        <span>Open a module to review and change its access.</span>
       </div>
 
-      <div className="permission-browser-v4__groups">
+      <div className="permission-browser-v6__groups">
         {groups.map(({ module, items }) => {
           const selectedInGroup = items.filter((item) => selected.has(item.id)).length;
           const allSelected = items.length > 0 && selectedInGroup === items.length;
           const isOpen = Boolean(openModules[module]);
-          const pct = items.length ? Math.round((selectedInGroup / items.length) * 100) : 0;
+          const progress = items.length ? Math.round((selectedInGroup / items.length) * 100) : 0;
 
           return (
-            <section className={isOpen ? 'permission-module-v4 is-open' : 'permission-module-v4'} key={module}>
-              <div className="permission-module-v4__head">
+            <div className={isOpen ? 'permission-module-v6 is-open' : 'permission-module-v6'} key={module}>
+              <div className="permission-module-v6__head">
                 <button
                   type="button"
-                  className="permission-module-v4__toggle"
+                  className="permission-module-v6__toggle"
                   onClick={() => setOpenModules((current) => ({ ...current, [module]: !isOpen }))}
                   aria-expanded={isOpen}
                 >
-                  <span className="permission-module-v4__chevron" aria-hidden="true">›</span>
-                  <span className="permission-module-v4__title">
+                  <span className="permission-module-v6__chevron" aria-hidden="true">›</span>
+                  <span className="permission-module-v6__title">
                     <strong>{human(module)}</strong>
                     <small>{selectedInGroup} of {items.length} selected</small>
                   </span>
-                  <span className="permission-module-v4__meter" aria-hidden="true"><i style={{ width: `${pct}%` }} /></span>
+                  <span className="permission-module-v6__meter" aria-hidden="true"><i style={{ width: `${progress}%` }} /></span>
                 </button>
+
                 {!readOnly && onToggle ? (
                   <button
                     type="button"
-                    className="permission-module-v4__bulk"
+                    className="permission-module-v6__bulk"
                     onClick={() => items.forEach((item) => onToggle(item.id, !allSelected))}
                   >
                     {allSelected ? 'Clear module' : 'Select all'}
@@ -133,18 +134,18 @@ export function PermissionChecklist({
               </div>
 
               {isOpen ? (
-                <div className="permission-module-v4__list">
+                <div className="permission-module-v6__list">
                   {items.map((permission) => {
                     const checked = selected.has(permission.id);
                     return (
-                      <label key={permission.id} className={checked ? 'permission-option-v4 is-selected' : 'permission-option-v4'}>
+                      <label key={permission.id} className={checked ? 'permission-option-v6 is-selected' : 'permission-option-v6'}>
                         <input
                           type="checkbox"
                           checked={checked}
                           disabled={readOnly}
                           onChange={(event) => onToggle?.(permission.id, event.target.checked)}
                         />
-                        <span className="permission-option-v4__copy">
+                        <span className="permission-option-v6__copy">
                           <strong>{permissionLabel(permission)}</strong>
                           <small>{permission.description?.trim() || fallbackDescription(permission)}</small>
                         </span>
@@ -154,13 +155,13 @@ export function PermissionChecklist({
                   })}
                 </div>
               ) : null}
-            </section>
+            </div>
           );
         })}
       </div>
 
       {!visibleCount ? (
-        <div className="permission-browser-v4__empty">
+        <div className="permission-browser-v6__empty">
           <strong>{selectedOnly ? 'No selected permissions match this view.' : 'No permissions match your search.'}</strong>
           <span>{selectedOnly ? 'Turn off “Selected only” to see the full access catalogue.' : 'Try another permission, module or access code.'}</span>
         </div>

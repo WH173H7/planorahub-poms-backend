@@ -13,7 +13,9 @@ import { NativeSelect } from '@/components/ui/native-select';
 import {
   deleteStaff,
   getStaff,
+  getStaffDirectMessageAccess,
   listDepartments,
+  listPermissions,
   listRoles,
   listStaff,
   listTeams,
@@ -21,10 +23,13 @@ import {
   setStaffStatus,
   updateStaff,
   type Department,
+  type DirectMessageAccess,
   type MailDelivery,
+  type Permission,
   type Role,
   type Staff,
 } from '@/lib/staff/api';
+import { PermissionChecklist } from './permission-checklist';
 
 type StaffProfile = Record<string, any>;
 
@@ -60,32 +65,43 @@ export function StaffDetailView({ staffId }: { staffId: string }) {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [passwordDelivery, setPasswordDelivery] = useState<MailDelivery | null>(null);
   const [roles, setRoles] = useState<Role[]>([]);
+  const [permissions, setPermissions] = useState<Permission[]>([]);
+  const [directAccess, setDirectAccess] = useState<DirectMessageAccess | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [teams, setTeams] = useState<Array<{ id: string; name: string; department_id: string }>>([]);
   const [staffOptions, setStaffOptions] = useState<Staff[]>([]);
   const [message, setMessage] = useState<string | null>(null);
 
   async function load() {
-    setItem(await getStaff(staffId));
+    const [profile, access] = await Promise.all([getStaff(staffId), getStaffDirectMessageAccess(staffId)]);
+    setItem(profile);
+    setDirectAccess(access);
   }
 
   useEffect(() => {
     let active = true;
-    Promise.all([getStaff(staffId), listRoles(), listDepartments(), listTeams(), listStaff()]).then(
-      ([profile, roleRows, departmentRows, teamRows, staffRows]) => {
+    Promise.all([getStaff(staffId), listRoles(), listPermissions(), listDepartments(), listTeams(), listStaff(), getStaffDirectMessageAccess(staffId)])
+      .then(([profile, roleRows, permissionRows, departmentRows, teamRows, staffRows, access]) => {
         if (!active) return;
         setItem(profile);
         setRoles(roleRows);
+        setPermissions(permissionRows);
         setDepartments(departmentRows);
         setTeams(teamRows);
         setStaffOptions(staffRows);
-      },
-    );
+        setDirectAccess(access);
+        setLoadError(null);
+      })
+      .catch((caught) => {
+        if (!active) return;
+        setLoadError(caught instanceof Error ? caught.message : 'Unable to load staff profile.');
+      });
     return () => { active = false; };
   }, [staffId]);
 
   if (!item) {
-    return <AppShell area="admin" title="Staff" breadcrumb="People / Staff"><Card><div className="ui-card-content">Loading staff profile…</div></Card></AppShell>;
+    return <AppShell area="admin" title="Staff" breadcrumb="People / Staff"><Card><div className="ui-card-content">{loadError || 'Loading staff profile…'}</div></Card></AppShell>;
   }
 
   const name = `${item.first_name} ${item.last_name}`;
@@ -185,7 +201,7 @@ export function StaffDetailView({ staffId }: { staffId: string }) {
 
       {deleteOpen ? <DeleteStaffDialog staffName={name} staffEmail={item.email} status={item.status} connectedTotal={connectedTotal} staffOptions={staffOptions.filter((staff)=>staff.id!==staffId&&staff.status==='ACTIVE')} onClose={()=>setDeleteOpen(false)} onDelete={async(reassignToId)=>{await deleteStaff(staffId,reassignToId);router.push('/staff');router.refresh();}}/> : null}
 
-      {editOpen ? <EditStaffDialog item={item} roles={roles} departments={departments} teams={teams} onClose={() => setEditOpen(false)} onSaved={async()=>{setEditOpen(false);await load();setMessage('Staff profile updated.');}}/> : null}
+      {editOpen ? <EditStaffDialog item={item} roles={roles} permissions={permissions} departments={departments} teams={teams} directAccess={directAccess} onClose={() => setEditOpen(false)} onSaved={async()=>{setEditOpen(false);await load();setMessage('Staff profile, permissions and messaging access updated.');}}/> : null}
     </AppShell>
   );
 }
@@ -254,19 +270,33 @@ function ResetPasswordDialog({
 function EditStaffDialog({
   item,
   roles,
+  permissions,
   departments,
   teams,
+  directAccess,
   onClose,
   onSaved,
 }: {
   item: StaffProfile;
   roles: Role[];
+  permissions: Permission[];
   departments: Department[];
   teams: Array<{ id: string; name: string; department_id: string }>;
+  directAccess: DirectMessageAccess | null;
   onClose: () => void;
   onSaved: () => Promise<void>;
 }) {
   const initialTeamId = item.teams?.[0]?.id ?? '';
+  const initialEffectivePermissionIds = useMemo(() => {
+    const effective = new Set<string>((item.role_permissions ?? []).map((permission: Permission) => permission.id));
+    for (const override of item.permission_overrides ?? []) {
+      if (override.effect === 'ALLOW') effective.add(override.permission_id);
+      if (override.effect === 'DENY') effective.delete(override.permission_id);
+    }
+    return [...effective];
+  }, [item.permission_overrides, item.role_permissions]);
+
+  const [tab, setTab] = useState<'PROFILE' | 'ACCESS'>('PROFILE');
   const [form, setForm] = useState<EditForm>({
     firstName: item.first_name ?? '',
     lastName: item.last_name ?? '',
@@ -277,19 +307,35 @@ function EditStaffDialog({
     departmentId: item.department_id ?? '',
     teamId: initialTeamId,
   });
+  const [selectedPermissionIds, setSelectedPermissionIds] = useState<string[]>(initialEffectivePermissionIds);
+  const [directMessageUserIds, setDirectMessageUserIds] = useState<string[]>(directAccess?.selectedUserIds ?? []);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const availableTeams = useMemo(() => teams, [teams]);
+  const selectedRole = roles.find((role) => role.id === form.roleId) ?? null;
+  const basePermissionIds = useMemo(() => new Set(selectedRole?.permissions?.map((permission) => permission.id) ?? []), [selectedRole]);
+  const selectedPermissionSet = useMemo(() => new Set(selectedPermissionIds), [selectedPermissionIds]);
+  const permissionOverrides = permissions.flatMap((permission) => {
+    const base = basePermissionIds.has(permission.id);
+    const selected = selectedPermissionSet.has(permission.id);
+    if (base === selected) return [];
+    return [{ permissionId: permission.id, effect: selected ? 'ALLOW' as const : 'DENY' as const, reason: 'Adjusted in staff access editor' }];
+  });
 
   function set<K extends keyof EditForm>(key: K, value: EditForm[K]) {
     setForm((current) => ({ ...current, [key]: value }));
   }
 
+  function changeRole(roleId: string) {
+    set('roleId', roleId);
+    const role = roles.find((candidate) => candidate.id === roleId);
+    setSelectedPermissionIds(role?.permissions?.map((permission) => permission.id) ?? []);
+  }
+
   return (
-    <Modal open onClose={onClose} title="Edit staff profile">
+    <Modal open onClose={onClose} title="Edit staff profile & access" className="staff-edit-access-dialog">
       <form
-        className="stack"
+        className="staff-edit-access-form"
         onSubmit={async (event) => {
           event.preventDefault();
           setSaving(true);
@@ -304,6 +350,8 @@ function EditStaffDialog({
               roleId: form.roleId,
               departmentId: form.departmentId || null,
               teamIds: form.teamId ? [form.teamId] : [],
+              permissionOverrides,
+              directMessageUserIds: selectedRole?.code === 'SUPER_ADMIN' ? [] : directMessageUserIds,
             });
             await onSaved();
           } catch (caught) {
@@ -312,34 +360,63 @@ function EditStaffDialog({
           }
         }}
       >
-        <div className="staff-edit-grid">
-          <Input label="First name *" value={form.firstName} onChange={(event) => set('firstName', event.target.value)} required />
-          <Input label="Last name *" value={form.lastName} onChange={(event) => set('lastName', event.target.value)} required />
-          <Input label="Login email *" type="email" value={form.email} onChange={(event) => set('email', event.target.value)} required />
-          <Input label="Phone" value={form.phone} onChange={(event) => set('phone', event.target.value)} />
-          <Input label="Job title" value={form.jobTitle} onChange={(event) => set('jobTitle', event.target.value)} />
-          <NativeSelect label="Role *" value={form.roleId} onChange={(event) => set('roleId', event.target.value)} required>
-            {roles.filter((role) => role.id === item.role_id || (role.code !== 'SUPER_ADMIN' && role.is_active !== false)).map((role) => <option key={role.id} value={role.id}>{role.name}{role.is_active === false ? ' (archived)' : ''}</option>)}
-          </NativeSelect>
-          <NativeSelect
-            label="Department"
-            value={form.departmentId}
-            onChange={(event) => {
-              set('departmentId', event.target.value);
-            }}
-          >
-            <option value="">No department</option>
-            {departments.map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}
-          </NativeSelect>
-          <NativeSelect label="Team" value={form.teamId} onChange={(event) => set('teamId', event.target.value)}>
-            <option value="">No team</option>
-            {availableTeams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
-          </NativeSelect>
+        <div className="staff-edit-tabs" role="tablist" aria-label="Staff editor sections">
+          <button type="button" className={tab === 'PROFILE' ? 'is-active' : ''} onClick={() => setTab('PROFILE')}><span>01</span><strong>Profile & structure</strong></button>
+          <button type="button" className={tab === 'ACCESS' ? 'is-active' : ''} onClick={() => setTab('ACCESS')}><span>02</span><strong>Permissions & messaging</strong></button>
         </div>
-        {error ? <p style={{ color: '#a42323' }}>{error}</p> : null}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+
+        {tab === 'PROFILE' ? (
+          <div className="staff-edit-section">
+            <div className="staff-edit-section-head"><div><span className="eyebrow">Identity</span><h3>Staff profile & placement</h3><p>Update identity, role, department and team placement.</p></div></div>
+            <div className="staff-edit-grid">
+              <Input label="First name *" value={form.firstName} onChange={(event) => set('firstName', event.target.value)} required />
+              <Input label="Last name *" value={form.lastName} onChange={(event) => set('lastName', event.target.value)} required />
+              <Input label="Login email *" type="email" value={form.email} onChange={(event) => set('email', event.target.value)} required />
+              <Input label="Phone" value={form.phone} onChange={(event) => set('phone', event.target.value)} />
+              <Input label="Job title" value={form.jobTitle} onChange={(event) => set('jobTitle', event.target.value)} />
+              <NativeSelect label="Role *" value={form.roleId} onChange={(event) => changeRole(event.target.value)} required>
+                {roles.filter((role) => role.id === item.role_id || (role.code !== 'SUPER_ADMIN' && role.is_active !== false)).map((role) => <option key={role.id} value={role.id}>{role.name}{role.is_active === false ? ' (archived)' : ''}</option>)}
+              </NativeSelect>
+              <NativeSelect label="Department" value={form.departmentId} onChange={(event) => set('departmentId', event.target.value)}>
+                <option value="">No department</option>
+                {departments.map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}
+              </NativeSelect>
+              <NativeSelect label="Team" value={form.teamId} onChange={(event) => set('teamId', event.target.value)}>
+                <option value="">No team</option>
+                {teams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
+              </NativeSelect>
+            </div>
+            <div className="staff-edit-next"><Button type="button" onClick={() => setTab('ACCESS')}>Review permissions & messaging →</Button></div>
+          </div>
+        ) : (
+          <div className="staff-edit-section staff-edit-section--access">
+            <div className="staff-edit-section-head"><div><span className="eyebrow">Effective access</span><h3>Permissions & direct messaging</h3><p>Role access is inherited first. Changes below apply only to this staff member.</p></div><Badge tone={permissionOverrides.length ? 'warning' : 'success'}>{permissionOverrides.length ? `${permissionOverrides.length} custom permission${permissionOverrides.length === 1 ? '' : 's'}` : 'Matches role'}</Badge></div>
+            <PermissionChecklist
+              permissions={permissions}
+              selectedIds={selectedPermissionIds}
+              onToggle={(id, checked) => setSelectedPermissionIds((current) => checked ? [...new Set([...current, id])] : current.filter((value) => value !== id))}
+            />
+            <div className="staff-direct-access-editor">
+              <div className="staff-direct-access-editor__head"><div><strong>Direct-message contacts</strong><p>Super Admin is always available. Grant private staff-to-staff messaging only where needed.</p></div><Badge tone="neutral">{selectedRole?.code === 'SUPER_ADMIN' ? 'All staff available' : `${directMessageUserIds.length} extra`}</Badge></div>
+              {selectedRole?.code === 'SUPER_ADMIN' ? <div className="staff-direct-access-admin-note">Super Admin can direct-message every active staff member automatically.</div> : (
+                <div className="staff-direct-access-options staff-direct-access-options--editor">
+                  {(directAccess?.options ?? []).map((person) => (
+                    <label key={person.id} className={directMessageUserIds.includes(person.id) ? 'staff-direct-access-option is-selected' : 'staff-direct-access-option'}>
+                      <input type="checkbox" checked={directMessageUserIds.includes(person.id)} onChange={(event) => setDirectMessageUserIds((current) => event.target.checked ? [...new Set([...current, person.id])] : current.filter((id) => id !== person.id))} />
+                      <span><strong>{person.first_name} {person.last_name}</strong><small>{person.job_title || person.role_name}{person.department_name ? ` · ${person.department_name}` : ''}</small></span>
+                    </label>
+                  ))}
+                  {!directAccess?.options?.length ? <span className="ui-help">No additional active staff are available for private direct messaging.</span> : null}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {error ? <p className="task-form-error">{error}</p> : null}
+        <div className="staff-edit-footer">
           <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
-          <Button type="submit" loading={saving}>Save changes</Button>
+          <Button type="submit" loading={saving}>Save profile & access</Button>
         </div>
       </form>
     </Modal>

@@ -51,6 +51,29 @@ export class AdminDirectoryController {
     };
   }
 
+  @Get('roles/:id/overview')
+  @RequirePermission('roles.manage')
+  async roleOverview(
+    @Param('id') id: string,
+  ) {
+    return {
+      success: true,
+      data: await this.directory.getRoleOverview(id),
+    };
+  }
+
+  @Delete('roles/:id')
+  @RequirePermission('roles.manage')
+  async deleteRole(
+    @Param('id') id: string,
+    @Body() body: { reassignRoleId?: string | null },
+  ) {
+    return {
+      success: true,
+      data: await this.directory.deleteRole(id, body?.reassignRoleId || null),
+    };
+  }
+
   @Patch('roles/:id')
   @RequirePermission('roles.manage')
   async updateRole(

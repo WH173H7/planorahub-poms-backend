@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Modal } from '@/components/ui/modal';
 import { NativeSelect } from '@/components/ui/native-select';
-import { createStaff, type MailDelivery, type Permission, type Role } from '@/lib/staff/api';
+import { createStaff, type MailDelivery, type Permission, type Role, type Staff } from '@/lib/staff/api';
 import { PermissionChecklist } from './permission-checklist';
 
 type Department = { id: string; name: string; is_active: boolean };
@@ -20,6 +20,7 @@ type Form = {
   roleId: string;
   departmentId: string;
   teamIds: string[];
+  directMessageUserIds: string[];
 };
 
 export function CreateStaffWizard({
@@ -27,6 +28,7 @@ export function CreateStaffWizard({
   permissions,
   departments,
   teams,
+  staff,
   onClose,
   onCreated,
 }: {
@@ -34,11 +36,12 @@ export function CreateStaffWizard({
   permissions: Permission[];
   departments: Department[];
   teams: Team[];
+  staff: Staff[];
   onClose: () => void;
   onCreated: (result: { name: string; email: string; password: string; emailDelivery: MailDelivery }) => Promise<void>;
 }) {
   const [step, setStep] = useState(1);
-  const [form, setForm] = useState<Form>({ firstName: '', lastName: '', email: '', phone: '', jobTitle: '', roleId: '', departmentId: '', teamIds: [] });
+  const [form, setForm] = useState<Form>({ firstName: '', lastName: '', email: '', phone: '', jobTitle: '', roleId: '', departmentId: '', teamIds: [], directMessageUserIds: [] });
   const [selectedPermissionIds, setSelectedPermissionIds] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -47,6 +50,8 @@ export function CreateStaffWizard({
   const selectedRole = assignableRoles.find((role) => role.id === form.roleId) ?? null;
   const selectedDepartment = departments.find((department) => department.id === form.departmentId);
   const selectedTeams = teams.filter((team) => form.teamIds.includes(team.id));
+  const directCandidates = staff.filter((person) => person.status === 'ACTIVE' && person.role_code !== 'SUPER_ADMIN');
+  const selectedDirectContacts = directCandidates.filter((person) => form.directMessageUserIds.includes(person.id));
   const basePermissionIds = useMemo(() => new Set(selectedRole?.permissions?.map((permission) => permission.id) ?? []), [selectedRole]);
   const selectedPermissionSet = useMemo(() => new Set(selectedPermissionIds), [selectedPermissionIds]);
 
@@ -143,6 +148,18 @@ export function CreateStaffWizard({
                 {!teams.some((team) => team.is_active) ? <span className="ui-help">No active teams yet. You can add them later.</span> : null}
               </div>
             </div>
+            <div className="staff-direct-access-setup">
+              <div><strong>Direct messaging access</strong><p className="ui-help">Super Admin is always available in Direct messages. Select any additional staff this person may message privately.</p></div>
+              <div className="staff-direct-access-options">
+                {directCandidates.map((person) => (
+                  <label key={person.id} className={form.directMessageUserIds.includes(person.id) ? 'staff-direct-access-option is-selected' : 'staff-direct-access-option'}>
+                    <input type="checkbox" checked={form.directMessageUserIds.includes(person.id)} onChange={(event) => patch('directMessageUserIds', event.target.checked ? [...form.directMessageUserIds, person.id] : form.directMessageUserIds.filter((id) => id !== person.id))} />
+                    <span><strong>{person.first_name} {person.last_name}</strong><small>{person.job_title || person.role_name}{person.department_name ? ` · ${person.department_name}` : ''}</small></span>
+                  </label>
+                ))}
+                {!directCandidates.length ? <span className="ui-help">No other active staff are available yet. Admin access will still be available by default.</span> : null}
+              </div>
+            </div>
           </section>
         ) : null}
 
@@ -156,6 +173,7 @@ export function CreateStaffWizard({
               <div><span>Department</span><strong>{selectedDepartment?.name || '—'}</strong></div>
               <div><span>Teams</span><strong>{selectedTeams.map((team) => team.name).join(', ') || 'None'}</strong></div>
               <div><span>Permissions</span><strong>{selectedPermissionIds.length}{overrides.length ? ` (${overrides.length} customized)` : ''}</strong></div>
+              <div><span>Direct messaging</span><strong>Admin + {selectedDirectContacts.length} staff</strong></div>
             </div>
             <div className="staff-invite-note"><strong>First-login protection is enabled</strong><span>They cannot access CRM data until they replace the temporary password.</span></div>
           </section>

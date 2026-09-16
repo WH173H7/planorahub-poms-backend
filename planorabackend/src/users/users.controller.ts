@@ -30,6 +30,23 @@ export class UsersController {
     return { success: true, message: 'Staff account updated successfully', data: await this.usersService.updateStaff(id, body, this.ctx(req, ua)) };
   }
 
+  @Get(':id/direct-message-access')
+  @RequirePermission('users.read.all')
+  async getDirectMessageAccess(@Param('id') id: string) {
+    return { success: true, data: await this.usersService.getDirectMessageAccess(id) };
+  }
+
+  @Patch(':id/direct-message-access')
+  @RequirePermission('users.update.all')
+  async setDirectMessageAccess(
+    @Param('id') id: string,
+    @Body() body: { userIds?: string[] },
+    @Req() req: AuthenticatedRequest,
+    @Headers('user-agent') ua?: string,
+  ) {
+    return { success: true, data: await this.usersService.setDirectMessageAccess(id, body.userIds ?? [], this.ctx(req, ua)) };
+  }
+
   @Post(':id/suspend')
   @RequirePermission('users.suspend')
   async suspendStaff(@Param('id') id: string, @Req() req: AuthenticatedRequest, @Headers('user-agent') ua?: string) {

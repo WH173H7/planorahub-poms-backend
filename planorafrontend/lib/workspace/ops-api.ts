@@ -1,6 +1,6 @@
 import {apiFetch} from '@/lib/api/client';type R<T>={success:boolean;data:T};
 export type Notice={id:string;title:string;body:string|null;kind:string;href:string|null;read_at:string|null;created_at:string};
-export type DirectContact={id:string;first_name:string;last_name:string;job_title:string|null;unread_count?:number;last_message?:string|null;last_message_at?:string|null};
+export type DirectContact={id:string;first_name:string;last_name:string;job_title:string|null;role_name?:string|null;role_code?:string|null;unread_count?:number;last_message?:string|null;last_message_at?:string|null};
 export type DirectMessage={id:string;sender_user_id:string;body:string;read_at:string|null;delivered_at?:string|null;created_at:string;first_name:string;last_name:string;attachments?:Array<{id:string;file_name:string;mime_type:string;file_size:number}>};
 export const listNotifications=async()=> (await apiFetch<R<Notice[]>>('/notifications')).data;
 export const readNotice=async(id:string)=> (await apiFetch<R<Notice>>(`/notifications/${id}/read`,{method:'POST'})).data;
@@ -11,9 +11,13 @@ export const sendDirect=async(id:string,body:string)=> (await apiFetch<R<DirectM
 export const listManagedDepartments=async()=> (await apiFetch<R<any[]>>('/admin/departments-manage')).data;
 export const createManagedDepartment=async(body:any)=> (await apiFetch<R<any>>('/admin/departments-manage',{method:'POST',body:JSON.stringify(body)})).data;
 export const patchManagedDepartment=async(id:string,body:any)=> (await apiFetch<R<any>>(`/admin/departments-manage/${id}`,{method:'PATCH',body:JSON.stringify(body)})).data;
+export const getManagedDepartmentOverview=async(id:string)=> (await apiFetch<R<any>>(`/admin/departments-manage/${id}/overview`)).data;
+export const deleteManagedDepartment=async(id:string,reassignDepartmentId?:string|null)=> (await apiFetch<R<any>>(`/admin/departments-manage/${id}`,{method:'DELETE',body:JSON.stringify({reassignDepartmentId:reassignDepartmentId||null})})).data;
 export const listManagedTeams=async()=> (await apiFetch<R<any[]>>('/admin/teams-manage')).data;
 export const createManagedTeam=async(body:any)=> (await apiFetch<R<any>>('/admin/teams-manage',{method:'POST',body:JSON.stringify(body)})).data;
 export const patchManagedTeam=async(id:string,body:any)=> (await apiFetch<R<any>>(`/admin/teams-manage/${id}`,{method:'PATCH',body:JSON.stringify(body)})).data;
+export const getManagedTeamOverview=async(id:string)=> (await apiFetch<R<any>>(`/admin/teams-manage/${id}/overview`)).data;
+export const deleteManagedTeam=async(id:string,reassignTeamId?:string|null)=> (await apiFetch<R<any>>(`/admin/teams-manage/${id}`,{method:'DELETE',body:JSON.stringify({reassignTeamId:reassignTeamId||null})})).data;
 export const listReminders=async()=> (await apiFetch<R<any[]>>('/calendar/reminders')).data;
 export const createReminder=async(body:any)=> (await apiFetch<R<any>>('/calendar/reminders',{method:'POST',body:JSON.stringify(body)})).data;
 export type SearchResult={kind:string;id:string;title:string;subtitle:string;href:string};
