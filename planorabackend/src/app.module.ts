@@ -26,6 +26,7 @@ import { ReportsModule } from './reports/reports.module.js';
 import { LetterheadModule } from './letterhead/letterhead.module.js';
 import { WorkspaceOpsModule } from './workspace-ops/workspace-ops.module.js';
 import { CrmMailModule } from './crm-mail/crm-mail.module.js';
+import { InvoicesModule } from './invoices/invoices.module.js';
 
 @Module({
   imports: [
@@ -56,6 +57,7 @@ import { CrmMailModule } from './crm-mail/crm-mail.module.js';
     LetterheadModule,
     WorkspaceOpsModule,
     CrmMailModule,
+    InvoicesModule,
   ],
   controllers: [AppController],
   providers: [AppService],

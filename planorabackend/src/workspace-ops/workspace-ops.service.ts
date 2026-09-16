@@ -218,6 +218,12 @@ export class WorkspaceOpsService{
       WHERE $2
 
       UNION ALL
+      SELECT 'INVOICE',i.id,i.invoice_number,o.name,'/invoices/'||i.id
+      FROM invoices i
+      JOIN organizations o ON o.id=i.organization_id
+      WHERE $2
+
+      UNION ALL
       SELECT 'FILE',sf.id,sf.file_name,COALESCE(f.name,''),'/shared-files'
       FROM shared_files sf
       JOIN shared_folders f ON f.id=sf.folder_id

@@ -16,6 +16,7 @@ function searchKindIcon(kind: string): IconName {
     case 'task': return 'tasks';
     case 'staff': return 'staff';
     case 'file': return 'file';
+    case 'invoice': return 'invoice';
     default: return 'search';
   }
 }
@@ -34,7 +35,7 @@ function SearchResults({ rows, busy, onPick }: { rows: SearchResult[]; busy: boo
       <div className="global-search-state global-search-empty">
         <span className="global-search-empty-icon" aria-hidden="true"><Icon name="search" /></span>
         <strong>No matching records</strong>
-        <span>Try a company, lead, contact, staff member or task name.</span>
+        <span>Try a company, invoice, lead, contact, staff member or task name.</span>
       </div>
     );
   }
@@ -145,7 +146,7 @@ export function GlobalSearch() {
       <div className="mobile-search-header">
         <div className="mobile-search-input-wrap">
           <Icon name="search" />
-          <input ref={mobileInput} aria-label="Search CRM" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search leads, tasks, staff, files…" />
+          <input ref={mobileInput} aria-label="Search CRM" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search invoices, leads, tasks, staff, files…" />
         </div>
         <button type="button" className="mobile-search-close" onClick={closeAndReset}>Done</button>
       </div>

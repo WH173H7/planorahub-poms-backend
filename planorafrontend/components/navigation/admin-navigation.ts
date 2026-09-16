@@ -20,6 +20,7 @@ export const adminNavigation: NavigationSection[] = [
     { label: 'Official Letters', href: '/letterhead', icon: 'letter' },
     { label: 'Shared Files', href: '/shared-files', icon: 'file' },
   ]},
+  { label: 'Finance', items: [{ label: 'Invoices', href: '/invoices', icon: 'invoice', permission: 'invoices.read' }] },
   { label: 'Insights', items: [
     { label: 'Analytics', href: '/analytics', icon: 'analytics' },
     { label: 'Reports', href: '/reports', icon: 'reports' },

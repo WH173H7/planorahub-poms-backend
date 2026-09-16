@@ -111,10 +111,17 @@ export function AppShell({
     );
   }
 
-  const navigation =
+  const navigationSource =
     area === 'admin' || (area === 'auto' && hasAdministrativeAccess(user))
       ? adminNavigation
       : staffNavigation;
+
+  const navigation = navigationSource
+    .map((section) => ({
+      ...section,
+      items: section.items.filter((item) => !item.permission || user.permissions.includes(item.permission)),
+    }))
+    .filter((section) => section.items.length > 0);
 
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
