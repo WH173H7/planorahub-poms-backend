@@ -1,0 +1,1 @@
+import { Card } from './card';export function MetricCard({label,value='—',note='Awaiting data connection'}:{label:string;value?:string;note?:string}){return <Card className="metric-card"><div className="metric-card-label">{label}</div><div className="metric-card-value">{value}</div><div className="metric-card-note">{note}</div></Card>}

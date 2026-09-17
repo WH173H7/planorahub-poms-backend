@@ -1,0 +1,233 @@
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Headers,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Req,
+  UploadedFile,
+  UseGuards,
+  UseInterceptors,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { AuthGuard, type AuthenticatedRequest } from '../auth/auth.guard.js';
+import { PermissionGuard } from '../permissions/permission.guard.js';
+import { RequirePermission } from '../auth/require-permission.decorator.js';
+import { WorkspaceOpsService } from './workspace-ops.service.js';
+
+@Controller()
+@UseGuards(AuthGuard)
+export class WorkspaceOpsController {
+  constructor(private readonly s: WorkspaceOpsService) {}
+
+  @Get('admin/departments-manage')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('departments.manage')
+  async deps() { return { success: true, data: await this.s.departments() }; }
+
+  @Post('admin/departments-manage')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('departments.manage')
+  async depCreate(@Body() b: any, @Req() r: AuthenticatedRequest, @Headers('user-agent') ua?: string) {
+    return { success: true, data: await this.s.createDepartment(b, this.ctx(r, ua)) };
+  }
+
+  @Get('admin/departments-manage/:id/overview')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('departments.manage')
+  async depOverview(@Param('id') id: string) { return { success: true, data: await this.s.departmentOverview(id) }; }
+
+  @Patch('admin/departments-manage/:id')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('departments.manage')
+  async depPatch(@Param('id') id: string, @Body() b: any, @Req() r: AuthenticatedRequest, @Headers('user-agent') ua?: string) {
+    return { success: true, data: await this.s.setDepartment(id, b, this.ctx(r, ua)) };
+  }
+
+  @Delete('admin/departments-manage/:id')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('departments.manage')
+  async depDelete(@Param('id') id: string, @Body() b: { reassignDepartmentId?: string | null }, @Req() r: AuthenticatedRequest, @Headers('user-agent') ua?: string) {
+    return { success: true, data: await this.s.deleteDepartmentManaged(id, b?.reassignDepartmentId || null, this.ctx(r, ua)) };
+  }
+
+  @Get('admin/teams-manage')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('departments.manage')
+  async teams(@Query('departmentId') d?: string) { return { success: true, data: await this.s.teams(d) }; }
+
+  @Post('admin/teams-manage')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('departments.manage')
+  async teamCreate(@Body() b: any, @Req() r: AuthenticatedRequest, @Headers('user-agent') ua?: string) {
+    return { success: true, data: await this.s.createTeam(b, this.ctx(r, ua)) };
+  }
+
+  @Get('admin/teams-manage/:id/overview')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('departments.manage')
+  async teamOverview(@Param('id') id: string) { return { success: true, data: await this.s.teamOverview(id) }; }
+
+  @Get('admin/teams-manage/:id/members')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('departments.manage')
+  async teamMembers(@Param('id') id: string) { return { success: true, data: await this.s.teamMembers(id) }; }
+
+  @Patch('admin/teams-manage/:id/members')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('departments.manage')
+  async teamMembersPatch(@Param('id') id: string, @Body() b: any, @Req() r: AuthenticatedRequest, @Headers('user-agent') ua?: string) {
+    return { success: true, data: await this.s.setTeamMembers(id, b, this.ctx(r, ua)) };
+  }
+
+  @Get('admin/staff-ops-analytics')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('analytics.read.all')
+  async staffOpsAnalytics() { return { success: true, data: await this.s.staffOpsAnalytics() }; }
+
+  @Patch('admin/teams-manage/:id')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('departments.manage')
+  async teamPatch(@Param('id') id: string, @Body() b: any, @Req() r: AuthenticatedRequest, @Headers('user-agent') ua?: string) {
+    return { success: true, data: await this.s.setTeam(id, b, this.ctx(r, ua)) };
+  }
+
+  @Delete('admin/teams-manage/:id')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('departments.manage')
+  async teamDelete(@Param('id') id: string, @Body() b: { reassignTeamId?: string | null }, @Req() r: AuthenticatedRequest, @Headers('user-agent') ua?: string) {
+    return { success: true, data: await this.s.deleteTeamManaged(id, b?.reassignTeamId || null, this.ctx(r, ua)) };
+  }
+
+  @Get('notifications')
+  async notifications(@Req() r: AuthenticatedRequest) { return { success: true, data: await this.s.notifications(r.user!.id) }; }
+
+  @Post('notifications/read-all')
+  async readAll(@Req() r: AuthenticatedRequest) { return { success: true, data: await this.s.readAll(r.user!.id) }; }
+
+  @Post('notifications/:id/read')
+  async read(@Param('id') id: string, @Req() r: AuthenticatedRequest) { return { success: true, data: await this.s.readNotification(r.user!.id, id) }; }
+
+  @Get('direct-chat/contacts')
+  async contacts(@Req() r: AuthenticatedRequest) { return { success: true, data: await this.s.directContacts(r.user!.id, r.user!.roleCode) }; }
+
+  @Get('direct-chat/:userId')
+  async conversation(@Param('userId') id: string, @Req() r: AuthenticatedRequest) { return { success: true, data: await this.s.conversation(r.user!.id, id, r.user!.roleCode) }; }
+
+  @Post('direct-chat/:userId/attachments')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024, files: 1 } }))
+  async uploadChat(@Param('userId') id: string, @UploadedFile() file: any, @Req() r: AuthenticatedRequest, @Headers('user-agent') ua?: string) {
+    return { success: true, data: await this.s.uploadChat(r.user!.id, id, file, r.user!.roleCode, this.ctx(r, ua)) };
+  }
+
+  @Get('direct-chat/attachments/:id')
+  async chatAttachment(@Param('id') id: string, @Req() r: AuthenticatedRequest, @Headers('user-agent') ua?: string) {
+    return { success: true, data: await this.s.chatAttachment(r.user!.id, id, this.ctx(r, ua)) };
+  }
+
+  @Get('crm-search')
+  async search(@Query('q') q: string, @Req() r: AuthenticatedRequest) { return { success: true, data: await this.s.search(q, r.user!.roleCode === 'SUPER_ADMIN', r.user!.id) }; }
+
+  @Get('admin/broadcasts')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('broadcasts.manage')
+  async broadcasts() { return { success: true, data: await this.s.broadcasts() }; }
+
+  @Post('admin/broadcasts')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('broadcasts.manage')
+  async broadcast(@Body() b: any, @Req() r: AuthenticatedRequest, @Headers('user-agent') ua?: string) {
+    return { success: true, data: await this.s.createBroadcast(r.user!.id, b, this.ctx(r, ua)) };
+  }
+
+  @Post('direct-chat/:userId')
+  async send(@Param('userId') id: string, @Body() b: { body: string }, @Req() r: AuthenticatedRequest, @Headers('user-agent') ua?: string) {
+    return { success: true, data: await this.s.send(r.user!.id, id, b.body, r.user!.roleCode, this.ctx(r, ua)) };
+  }
+
+  @Get('shared-folder-scopes')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('shared_files.read')
+  async sharedFolderScopes(@Req() r: AuthenticatedRequest) { return { success: true, data: await this.s.sharedFolderScopes(r.user!.id, r.user!.roleCode === 'SUPER_ADMIN') }; }
+
+  @Get('shared-folders')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('shared_files.read')
+  async sharedFolders(@Req() r: AuthenticatedRequest) { return { success: true, data: await this.s.sharedFolders(r.user!.id, r.user!.roleCode === 'SUPER_ADMIN') }; }
+
+  @Post('shared-folders')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('shared_files.create')
+  async sharedFolderCreate(@Body() b: any, @Req() r: AuthenticatedRequest, @Headers('user-agent') ua?: string) {
+    return { success: true, data: await this.s.createSharedFolder(r.user!.id, r.user!.roleCode === 'SUPER_ADMIN', b, this.ctx(r, ua)) };
+  }
+
+  @Patch('admin/shared-folders/:id/approval')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('shared_files.approve')
+  async sharedFolderApprove(@Param('id') id: string, @Body() b: { status: 'PUBLISHED' | 'REJECTED' }, @Req() r: AuthenticatedRequest, @Headers('user-agent') ua?: string) {
+    return { success: true, data: await this.s.approveSharedFolder(id, r.user!.id, b.status, this.ctx(r, ua)) };
+  }
+
+  @Get('shared-folders/:id/files')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('shared_files.read')
+  async sharedFiles(@Param('id') id: string, @Req() r: AuthenticatedRequest, @Headers('user-agent') ua?: string) {
+    return { success: true, data: await this.s.sharedFiles(id, r.user!.id, r.user!.roleCode === 'SUPER_ADMIN', this.ctx(r, ua)) };
+  }
+
+  @Post('shared-folders/:id/files')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('shared_files.create')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 20 * 1024 * 1024, files: 1 } }))
+  async sharedUpload(@Param('id') id: string, @UploadedFile() file: any, @Req() r: AuthenticatedRequest, @Headers('user-agent') ua?: string) {
+    return { success: true, data: await this.s.uploadSharedFile(id, r.user!.id, r.user!.roleCode === 'SUPER_ADMIN', file, this.ctx(r, ua)) };
+  }
+
+  @Get('shared-files/:id/download')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('shared_files.read')
+  async sharedDownload(@Param('id') id: string, @Req() r: AuthenticatedRequest, @Headers('user-agent') ua?: string) {
+    return { success: true, data: await this.s.sharedFileDownload(id, r.user!.id, r.user!.roleCode === 'SUPER_ADMIN', this.ctx(r, ua)) };
+  }
+
+  @Get('shared-folders/:id/access')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('shared_files.manage_access')
+  async folderAccess(@Param('id') id: string, @Req() r: AuthenticatedRequest) { return { success: true, data: await this.s.sharedItemAccess('FOLDER', id, r.user!.id, r.user!.roleCode === 'SUPER_ADMIN') }; }
+
+  @Patch('shared-folders/:id/access')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('shared_files.manage_access')
+  async folderAccessPatch(@Param('id') id: string, @Body() b: any, @Req() r: AuthenticatedRequest, @Headers('user-agent') ua?: string) {
+    return { success: true, data: await this.s.setSharedItemAccess('FOLDER', id, r.user!.id, r.user!.roleCode === 'SUPER_ADMIN', b, this.ctx(r, ua)) };
+  }
+
+  @Get('shared-files/:id/access')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('shared_files.manage_access')
+  async fileAccess(@Param('id') id: string, @Req() r: AuthenticatedRequest) { return { success: true, data: await this.s.sharedItemAccess('FILE', id, r.user!.id, r.user!.roleCode === 'SUPER_ADMIN') }; }
+
+  @Patch('shared-files/:id/access')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('shared_files.manage_access')
+  async fileAccessPatch(@Param('id') id: string, @Body() b: any, @Req() r: AuthenticatedRequest, @Headers('user-agent') ua?: string) {
+    return { success: true, data: await this.s.setSharedItemAccess('FILE', id, r.user!.id, r.user!.roleCode === 'SUPER_ADMIN', b, this.ctx(r, ua)) };
+  }
+
+  @Get('calendar/reminders')
+  async reminders(@Req() r: AuthenticatedRequest) { return { success: true, data: await this.s.reminders(r.user!.id, r.user!.roleCode === 'SUPER_ADMIN') }; }
+
+  @Post('calendar/reminders')
+  async reminder(@Body() b: any, @Req() r: AuthenticatedRequest, @Headers('user-agent') ua?: string) {
+    return { success: true, data: await this.s.createReminder(r.user!.id, b, this.ctx(r, ua)) };
+  }
+
+  private ctx(r: AuthenticatedRequest, userAgent?: string) {
+    return { actorUserId: r.user!.id, ipAddress: r.ip, userAgent };
+  }
+}

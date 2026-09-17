@@ -1,0 +1,23 @@
+import { apiFetch } from '@/lib/api/client';
+
+type R<T>={success:boolean;data:T};
+export type MailTemplateSummary={id:string;name:string;description:string|null;is_default:boolean;is_active:boolean};
+export type MailTemplate=MailTemplateSummary & {html:string;created_by_id:string|null;created_at:string;updated_at:string;first_name?:string|null;last_name?:string|null};
+export type MailSummary={configured:boolean;fromEmail:string|null;counts:{total:number;mine:number;granted:number;inbound:number;drafts:number};contexts:Array<{id:string;title:string;record_type:string;stage:string;assigned_to_id:string|null;assigned_team_id:string|null}>;staff:Array<{id:string;first_name:string;last_name:string;email:string;job_title:string|null}>;templates:MailTemplateSummary[]};
+export type MailThread={id:string;subject:string;created_by_id:string|null;lead_id:string|null;team_id:string|null;template_id?:string|null;recipient_emails:string[];cc_emails:string[];sender_label:string|null;status:string;last_message_at:string;created_at:string;creator_first_name:string|null;creator_last_name:string|null;organization_name:string|null;record_type:string|null;last_direction:'OUTBOUND'|'INBOUND'|null;snippet:string|null;message_count:number};
+export type MailMessage={id:string;thread_id:string;sender_user_id:string|null;direction:'OUTBOUND'|'INBOUND';provider_email_id:string|null;provider_message_id:string|null;from_email:string|null;to_emails:string[];cc_emails:string[];subject:string;body_text:string|null;delivery_status:string;created_at:string;sender_first_name:string|null;sender_last_name:string|null;attachments:Array<{id:string;file_name:string;mime_type:string;file_size:number}>};
+export type MailThreadDetail={thread:MailThread & {record_type:string|null;organization_name:string|null};messages:MailMessage[];grants:Array<{user_id:string;first_name:string;last_name:string;email:string}>};
+export type MailDraft={id:string;created_by_id:string;sender_label:string|null;recipient_emails:string[];cc_emails:string[];subject:string;body_text:string;lead_id:string|null;template_id:string|null;updated_at:string;created_at:string;organization_name?:string|null;record_type?:string|null;template_name?:string|null};
+export const mailSummary=async()=> (await apiFetch<R<MailSummary>>('/mail/summary')).data;
+export const mailThreads=async(box='all',q='')=> (await apiFetch<R<MailThread[]>>(`/mail/threads?box=${encodeURIComponent(box)}${q?`&q=${encodeURIComponent(q)}`:''}`)).data;
+export const mailThread=async(id:string)=> (await apiFetch<R<MailThreadDetail>>(`/mail/threads/${id}`)).data;
+export async function mailSend(input:{to:string;cc?:string;subject:string;body:string;leadId?:string;senderName?:string;templateId?:string;draftId?:string},files:File[]=[]){const form=new FormData();Object.entries(input).forEach(([k,v])=>{if(v)form.append(k,v)});files.forEach(f=>form.append('attachments',f));return(await apiFetch<R<MailThreadDetail>>('/mail/send',{method:'POST',body:form})).data}
+export async function mailReply(id:string,input:{body:string;senderName?:string},files:File[]=[]){const form=new FormData();Object.entries(input).forEach(([k,v])=>{if(v)form.append(k,v)});files.forEach(f=>form.append('attachments',f));return(await apiFetch<R<MailThreadDetail>>(`/mail/threads/${id}/reply`,{method:'POST',body:form})).data}
+export const mailGrantAccess=async(id:string,userIds:string[])=> (await apiFetch<R<MailThreadDetail>>(`/mail/threads/${id}/access`,{method:'PATCH',body:JSON.stringify({userIds})})).data;
+export const mailAttachment=async(id:string)=> (await apiFetch<R<{url:string;fileName:string}>>(`/mail/attachments/${id}`)).data;
+export const mailDrafts=async()=> (await apiFetch<R<MailDraft[]>>('/mail/drafts')).data;
+export const mailSaveDraft=async(id:string|null,body:{senderName?:string;to?:string;cc?:string;subject?:string;body?:string;leadId?:string;templateId?:string})=> (await apiFetch<R<MailDraft>>(id?`/mail/drafts/${id}`:'/mail/drafts',{method:id?'PATCH':'POST',body:JSON.stringify(body)})).data;
+export const mailDeleteDraft=async(id:string)=> (await apiFetch<R<boolean>>(`/mail/drafts/${id}/delete`,{method:'POST'})).data;
+export const mailTemplates=async()=> (await apiFetch<R<MailTemplate[]>>('/mail/templates')).data;
+export const mailCreateTemplate=async(body:{name:string;description?:string;html:string})=> (await apiFetch<R<MailTemplate>>('/mail/templates',{method:'POST',body:JSON.stringify(body)})).data;
+export const mailUpdateTemplate=async(id:string,body:{name?:string;description?:string;html?:string;isDefault?:boolean;isActive?:boolean})=> (await apiFetch<R<MailTemplate>>(`/mail/templates/${id}`,{method:'PATCH',body:JSON.stringify(body)})).data;

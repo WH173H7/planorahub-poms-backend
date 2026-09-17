@@ -1,0 +1,1 @@
+import type { ReactNode } from 'react';import type { Tone } from './badge';export function StatusPill({children,tone='neutral'}:{children:ReactNode;tone?:Tone}){return <span className={`status-pill tone-${tone}`}>{children}</span>}

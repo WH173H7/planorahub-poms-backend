@@ -1,0 +1,1 @@
+export function Avatar({name}:{name:string}){const initials=name.split(/\s+/).filter(Boolean).slice(0,2).map(part=>part[0]?.toUpperCase()).join('');return <span className="ui-avatar" aria-label={name}>{initials||'PH'}</span>}

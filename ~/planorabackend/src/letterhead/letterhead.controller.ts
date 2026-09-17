@@ -1,0 +1,18 @@
+import {Body,Controller,Get,Headers,Param,Patch,Post,Req,StreamableFile,UseGuards} from '@nestjs/common';import {AuthGuard,type AuthenticatedRequest} from '../auth/auth.guard.js';import {PermissionGuard} from '../permissions/permission.guard.js';import {RequirePermission} from '../auth/require-permission.decorator.js';import {LetterheadService} from './letterhead.service.js';
+@Controller('letterhead') @UseGuards(AuthGuard,PermissionGuard)
+export class LetterheadController{constructor(private readonly service:LetterheadService){}
+@Get('settings') @RequirePermission('letterhead.read') async settings(){return{success:true,data:await this.service.settings()}}
+@Patch('settings') @RequirePermission('letterhead.manage') async settingsUpdate(@Body()b:any,@Req()r:AuthenticatedRequest,@Headers('user-agent')ua?:string){return{success:true,data:await this.service.updateSettings(b,this.ctx(r,ua))}}
+@Get('letters') @RequirePermission('letterhead.read') async list(@Req()r:AuthenticatedRequest){return{success:true,data:await this.service.list(r.user!.id)}}
+@Post('letters') @RequirePermission('letters.write') async create(@Body()b:any,@Req()r:AuthenticatedRequest,@Headers('user-agent')ua?:string){return{success:true,data:await this.service.create(b,this.ctx(r,ua))}}
+@Patch('letters/:id') @RequirePermission('letters.write') async update(@Param('id')id:string,@Body()b:any,@Req()r:AuthenticatedRequest,@Headers('user-agent')ua?:string){return{success:true,data:await this.service.update(id,b,r.user!.id,this.ctx(r,ua))}}
+@Post('letters/:id/submit') @RequirePermission('letters.write') async submit(@Param('id')id:string,@Req()r:AuthenticatedRequest,@Headers('user-agent')ua?:string){return{success:true,data:await this.service.submit(id,r.user!.id,this.ctx(r,ua))}}
+@Post('letters/:id/review') @RequirePermission('letters.approve') async review(@Param('id')id:string,@Body()b:{status:'APPROVED'|'CHANGES_REQUESTED'|'REJECTED';note?:string|null},@Req()r:AuthenticatedRequest,@Headers('user-agent')ua?:string){return{success:true,data:await this.service.review(id,r.user!.id,b.status,b.note,this.ctx(r,ua))}}
+@Get('approvals') @RequirePermission('letters.approve') async approvals(){return{success:true,data:await this.service.pendingApprovals()}}
+@Get('approvals/count') @RequirePermission('letters.approve') async approvalCount(){return{success:true,data:await this.service.pendingApprovalCount()}}
+@Get('approval-scopes') @RequirePermission('letters.approve') async approvalScopes(){return{success:true,data:await this.service.approvalScopes()}}
+@Get('lead-options') @RequirePermission('letterhead.read') async leadOptions(@Req()r:AuthenticatedRequest){return{success:true,data:await this.service.leadOptions(r.user!.id)}}
+@Get('approval-exemptions') @RequirePermission('letters.approve') async exemptions(){return{success:true,data:await this.service.exemptions()}}
+@Post('approval-exemptions') @RequirePermission('letters.approve') async exemption(@Body()b:{subjectType:'STAFF'|'ROLE'|'DEPARTMENT'|'TEAM'|'LEAD';subjectId:string;enabled:boolean},@Req()r:AuthenticatedRequest,@Headers('user-agent')ua?:string){return{success:true,data:await this.service.setExemption(r.user!.id,b.subjectType,b.subjectId,b.enabled,this.ctx(r,ua))}}
+@Get('letters/:id/pdf') @RequirePermission('letterhead.read') async pdf(@Param('id')id:string,@Req()r:AuthenticatedRequest,@Headers('user-agent')ua?:string){const file=await this.service.pdf(id,r.user!.id,this.ctx(r,ua));return new StreamableFile(file,{type:'application/pdf',disposition:`attachment; filename="PlanoraHub-letter-${id.slice(0,8)}.pdf"`})}
+private ctx(r:AuthenticatedRequest,ua?:string){return{actorUserId:r.user!.id,ipAddress:r.ip,userAgent:ua}}}

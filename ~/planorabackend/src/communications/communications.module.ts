@@ -1,0 +1,1 @@
+import {Module} from '@nestjs/common';import {CommunicationsController} from './communications.controller.js';import {CommunicationsService} from './communications.service.js';@Module({controllers:[CommunicationsController],providers:[CommunicationsService]})export class CommunicationsModule{}
