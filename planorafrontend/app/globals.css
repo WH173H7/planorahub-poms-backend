@@ -5593,3 +5593,69 @@ body{overflow-x:hidden}
 .invoice-payment-entry.is-rejected .invoice-payment-approval{color:#a63d3d!important}
 .invoice-payment-review-actions{display:grid!important;grid-template-columns:1fr 1fr;gap:8px;margin-top:7px}
 .invoice-payment-review-actions .ui-button{justify-content:center}
+
+
+/* ============================================================
+   P28.6 — Mail composer viewport fix
+   Keep the compose actions permanently reachable. The right pane owns
+   one fixed-height flex layout; only the fields area scrolls.
+   ============================================================ */
+@media (min-width: 1101px){
+  .crm-mail-reader.is-composing{
+    display:flex;
+    min-height:0;
+    height:100%;
+    overflow:hidden;
+  }
+  .crm-mail-reader.is-composing>.crm-mail-compose-page{
+    display:flex;
+    flex:1 1 auto;
+    flex-direction:column;
+    width:100%;
+    min-width:0;
+    min-height:0;
+    height:100%;
+    max-height:100%;
+    overflow:hidden;
+  }
+  .crm-mail-reader.is-composing .crm-mail-compose-header,
+  .crm-mail-reader.is-composing .crm-mail-template-strip,
+  .crm-mail-reader.is-composing .crm-mail-compose-footer{
+    flex:0 0 auto;
+  }
+  .crm-mail-reader.is-composing .crm-mail-compose-fields{
+    flex:1 1 auto;
+    min-height:0;
+    overflow-x:hidden;
+    overflow-y:auto;
+    overscroll-behavior:contain;
+    scrollbar-gutter:stable;
+    padding-bottom:28px;
+  }
+  .crm-mail-reader.is-composing .crm-mail-compose-footer{
+    position:relative;
+    inset:auto;
+    z-index:8;
+    box-shadow:0 -10px 28px rgba(48,20,54,.07);
+  }
+  .crm-mail-reader.is-composing .crm-mail-compose-fields::-webkit-scrollbar{width:9px}
+  .crm-mail-reader.is-composing .crm-mail-compose-fields::-webkit-scrollbar-thumb{
+    border:2px solid transparent;
+    border-radius:999px;
+    background:#d8ccd9;
+    background-clip:padding-box;
+  }
+  .crm-mail-reader.is-composing .crm-mail-compose-fields::-webkit-scrollbar-track{background:transparent}
+}
+
+@media (max-width:1100px){
+  .crm-mail-reader.is-composing{overflow:visible}
+  .crm-mail-reader.is-composing>.crm-mail-compose-page{height:auto;max-height:none;overflow:visible}
+  .crm-mail-reader.is-composing .crm-mail-compose-fields{overflow:visible}
+  .crm-mail-reader.is-composing .crm-mail-compose-footer{
+    position:sticky;
+    bottom:0;
+    z-index:8;
+    box-shadow:0 -8px 22px rgba(48,20,54,.06);
+  }
+}
