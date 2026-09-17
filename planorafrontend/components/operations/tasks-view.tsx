@@ -11,7 +11,7 @@ import {EmptyState} from '@/components/ui/empty-state';
 import {NativeSelect} from '@/components/ui/native-select';
 import {PageErrorState,PageLoadingState} from '@/components/ui/page-state';
 import {getCurrentCrmUser} from '@/lib/auth/current-user';
-import {hasAdministrativeAccess} from '@/lib/auth/routing';
+import {canUseCompanyTasks} from '@/lib/auth/routing';
 import {listTasks} from '@/lib/leads/api';
 import {formatDate} from '@/lib/leads/helpers';
 import type {TaskDetail} from '@/lib/leads/types';
@@ -29,7 +29,7 @@ export function TasksView(){
   const [filter,setFilter]=useState<Filter>('ALL');
   const [search,setSearch]=useState('');
   const [status,setStatus]=useState('ALL');
-  const load=useCallback(async()=>{try{const user=await getCurrentCrmUser();const isStaff=!hasAdministrativeAccess(user);setStaffMode(isStaff);setRows(await listTasks(isStaff));setError(null)}catch(e){setError(e instanceof Error?e.message:'Unable to load tasks')}},[]);
+  const load=useCallback(async()=>{try{const user=await getCurrentCrmUser();const isStaff=!canUseCompanyTasks(user);setStaffMode(isStaff);setRows(await listTasks(isStaff));setError(null)}catch(e){setError(e instanceof Error?e.message:'Unable to load tasks')}},[]);
   useEffect(()=>{void load()},[load]);
 
   const now=Date.now();

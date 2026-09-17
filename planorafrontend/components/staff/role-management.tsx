@@ -17,7 +17,7 @@ export function RoleManagement({
   onReload: () => Promise<void>;
 }) {
   const visible = useMemo(
-    () => roles.filter((role) => role.code === 'MARKETING' || (!role.is_system_role && role.code !== 'SUPER_ADMIN')),
+    () => roles.filter((role) => ['MARKETING', 'FINANCE'].includes(role.code) || (!role.is_system_role && role.code !== 'SUPER_ADMIN')),
     [roles],
   );
   const active = visible.filter((role) => role.is_active !== false);
@@ -30,7 +30,7 @@ export function RoleManagement({
           <span className="eyebrow">Access management</span>
           <h2>Roles & permissions</h2>
           <p className="ui-help">
-            Create reusable access profiles for the people PlanoraHub employs. Marketing stays built in; every other operational role is yours to define.
+            Create reusable access profiles for PlanoraHub staff. Marketing and Finance are protected built-in roles; custom roles inherit only the permissions you select.
           </p>
         </div>
         <Link href="/staff/roles/new"><Button>+ Create role</Button></Link>
@@ -38,7 +38,7 @@ export function RoleManagement({
 
       <div className="role-overview-strip">
         <div><span>Active roles</span><strong>{active.length}</strong></div>
-        <div><span>Custom roles</span><strong>{visible.filter((role) => role.code !== 'MARKETING').length}</strong></div>
+        <div><span>Custom roles</span><strong>{visible.filter((role) => !role.is_system_role).length}</strong></div>
         <div><span>Staff assigned</span><strong>{assigned}</strong></div>
         <div><span>Available permissions</span><strong>{permissions.length}</strong></div>
       </div>
@@ -50,7 +50,7 @@ export function RoleManagement({
               <div className="role-card-top">
                 <div>
                   <div className="role-card-badges">
-                    {role.code === 'MARKETING' ? <Badge tone="info">Built in</Badge> : <Badge tone="neutral">Custom</Badge>}
+                    {role.is_system_role ? <Badge tone="info">Built in</Badge> : <Badge tone="neutral">Custom</Badge>}
                     {!role.is_active ? <Badge tone="warning">Archived</Badge> : <Badge tone="success">Active</Badge>}
                   </div>
                   <h3>{role.name}</h3>
@@ -64,9 +64,9 @@ export function RoleManagement({
               </div>
               <div className="role-card-actions">
                 <Link href={`/staff/roles/${role.id}`}>
-                  <Button variant="outline">{role.code === 'MARKETING' ? 'Review access' : 'Edit role'}</Button>
+                  <Button variant="outline">{role.is_system_role ? 'Review access' : 'Edit role'}</Button>
                 </Link>
-                {role.code !== 'MARKETING' ? (
+                {!role.is_system_role ? (
                   <Button
                     variant="ghost"
                     onClick={async () => {

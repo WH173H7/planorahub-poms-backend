@@ -8,7 +8,7 @@ import {Input} from '@/components/ui/input';
 import {Textarea} from '@/components/ui/textarea';
 import {NativeSelect} from '@/components/ui/native-select';
 import {getCurrentCrmUser} from '@/lib/auth/current-user';
-import {hasAdministrativeAccess} from '@/lib/auth/routing';
+import {hasPermission,isSuperAdmin} from '@/lib/auth/routing';
 import {
   createChatChannel,deleteChatMessage,getChatAttachment,listChatChannels,listChatMessages,sendChatMessage,uploadChatAttachment,
   type ChatChannel,type ChatMessage,
@@ -25,7 +25,7 @@ const day=(value:string)=>new Intl.DateTimeFormat(undefined,{weekday:'short',mon
 const icons:Record<string,string>={COMPANY:'✦',TEAM:'◎',DEPARTMENT:'◇',CUSTOM:'#',ADMIN:'◆'};
 
 export function ChatView(){
-  const[admin,setAdmin]=useState(false),[me,setMe]=useState<any>(null);
+  const[admin,setAdmin]=useState(false),[superAdmin,setSuperAdmin]=useState(false),[me,setMe]=useState<any>(null);
   const[channels,setChannels]=useState<ChatChannel[]>([]),[contacts,setContacts]=useState<DirectContact[]>([]),[selection,setSelection]=useState<Selection|null>(null);
   const[groupMessages,setGroupMessages]=useState<ChatMessage[]>([]),[directMessages,setDirectMessages]=useState<DirectMessage[]>([]);
   const[filter,setFilter]=useState<Filter>('ALL'),[search,setSearch]=useState(''),[body,setBody]=useState(''),[reply,setReply]=useState<ChatMessage|null>(null),[sending,setSending]=useState(false),[createOpen,setCreateOpen]=useState(false),[error,setError]=useState<string|null>(null);
@@ -37,7 +37,7 @@ export function ChatView(){
     setSelection(current=>{if(current)return current;if(typeof window!=='undefined'&&window.innerWidth<=760)return null;return chs[0]?{kind:'CHANNEL',id:chs[0].id}:people[0]?{kind:'DIRECT',id:people[0].id}:null});
   },[]);
 
-  useEffect(()=>{void Promise.resolve().then(async()=>{const user=await getCurrentCrmUser();setMe(user);setAdmin(hasAdministrativeAccess(user));await loadLists()})},[loadLists]);
+  useEffect(()=>{void Promise.resolve().then(async()=>{const user=await getCurrentCrmUser();setMe(user);setSuperAdmin(isSuperAdmin(user));setAdmin(isSuperAdmin(user)||hasPermission(user,'chat.manage'));await loadLists()})},[loadLists]);
   useEffect(()=>{const timer=setInterval(()=>void loadLists(),7000);return()=>clearInterval(timer)},[loadLists]);
   useEffect(()=>{
     if(!selection)return;
@@ -87,8 +87,8 @@ export function ChatView(){
         </>:<div className="messenger-welcome"><span>💬</span><h2>PlanoraHub Messenger</h2><p>Select a Direct, Team, Department or Company conversation.</p></div>}
       </section>
     </div>
-    {createOpen?<ChannelModal onClose={()=>setCreateOpen(false)} onSaved={async()=>{setCreateOpen(false);await loadLists()}}/>:null}
+    {createOpen?<ChannelModal superAdmin={superAdmin} onClose={()=>setCreateOpen(false)} onSaved={async()=>{setCreateOpen(false);await loadLists()}}/>:null}
   </AppShell>
 }
 
-function ChannelModal({onClose,onSaved}:{onClose:()=>void;onSaved:()=>Promise<void>}){const[name,setName]=useState(''),[description,setDescription]=useState(''),[visibility,setVisibility]=useState('ALL_STAFF'),[saving,setSaving]=useState(false);return <Modal open onClose={onClose} title="New company channel"><form className="premium-form" onSubmit={async e=>{e.preventDefault();setSaving(true);try{await createChatChannel({name,description,visibility});await onSaved()}finally{setSaving(false)}}}><div className="ui-help">Team and Department rooms are created automatically. Use custom channels for cross-company topics or an Admin-only room.</div><Input label="Channel name *" value={name} onChange={e=>setName(e.target.value)} required/><Textarea label="Purpose" value={description} onChange={e=>setDescription(e.target.value)} rows={3}/><NativeSelect label="Audience" value={visibility} onChange={e=>setVisibility(e.target.value)}><option value="ALL_STAFF">All staff</option><option value="ADMIN_ONLY">Super Admin only</option></NativeSelect><div className="task-form-actions"><Button type="button" variant="outline" onClick={onClose}>Cancel</Button><Button type="submit" loading={saving}>Create channel</Button></div></form></Modal>}
+function ChannelModal({superAdmin,onClose,onSaved}:{superAdmin:boolean;onClose:()=>void;onSaved:()=>Promise<void>}){const[name,setName]=useState(''),[description,setDescription]=useState(''),[visibility,setVisibility]=useState('ALL_STAFF'),[saving,setSaving]=useState(false);return <Modal open onClose={onClose} title="New company channel"><form className="premium-form" onSubmit={async e=>{e.preventDefault();setSaving(true);try{await createChatChannel({name,description,visibility});await onSaved()}finally{setSaving(false)}}}><div className="ui-help">Team and Department rooms are created automatically. Use custom channels for cross-company topics or an Admin-only room.</div><Input label="Channel name *" value={name} onChange={e=>setName(e.target.value)} required/><Textarea label="Purpose" value={description} onChange={e=>setDescription(e.target.value)} rows={3}/><NativeSelect label="Audience" value={visibility} onChange={e=>setVisibility(e.target.value)}><option value="ALL_STAFF">All staff</option>{superAdmin?<option value="ADMIN_ONLY">Super Admin only</option>:null}</NativeSelect><div className="task-form-actions"><Button type="button" variant="outline" onClick={onClose}>Cancel</Button><Button type="submit" loading={saving}>Create channel</Button></div></form></Modal>}

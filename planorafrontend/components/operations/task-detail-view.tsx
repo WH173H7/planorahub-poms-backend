@@ -9,7 +9,7 @@ import {Card} from '@/components/ui/card';
 import {Modal} from '@/components/ui/modal';
 import {PageErrorState,PageLoadingState} from '@/components/ui/page-state';
 import {getCurrentCrmUser} from '@/lib/auth/current-user';
-import {hasAdministrativeAccess} from '@/lib/auth/routing';
+import {canUseCompanyTasks} from '@/lib/auth/routing';
 import {controlTask,getTask,updateTask,uploadTaskAttachment} from '@/lib/leads/api';
 import {formatDate} from '@/lib/leads/helpers';
 import {reviewTask,taskAccept,taskStart,taskSubmit} from '@/lib/delivery/api';
@@ -32,7 +32,7 @@ export function TaskDetailView({taskId}:{taskId:string}){
   const [editing,setEditing]=useState(false);
   const [uploading,setUploading]=useState(false);
   const [reviewNote,setReviewNote]=useState('');
-  const load=useCallback(async()=>{try{const user=await getCurrentCrmUser();const isStaff=!hasAdministrativeAccess(user);setStaffMode(isStaff);setCurrentUserId(user.id);setTask(await getTask(taskId,isStaff));setError(null)}catch(e){setError(e instanceof Error?e.message:'Unable to load task')}},[taskId]);
+  const load=useCallback(async()=>{try{const user=await getCurrentCrmUser();const isStaff=!canUseCompanyTasks(user);setStaffMode(isStaff);setCurrentUserId(user.id);setTask(await getTask(taskId,isStaff));setError(null)}catch(e){setError(e instanceof Error?e.message:'Unable to load task')}},[taskId]);
   useEffect(()=>{void load()},[load]);
   if(staffMode===null)return <main><PageLoadingState/></main>;
   if(error||!task)return <AppShell area={staffMode?'staff':'admin'} title="Task" breadcrumb="Work / Tasks"><PageErrorState message={error||'Task not found'}/></AppShell>;

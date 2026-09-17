@@ -7,7 +7,7 @@ import {Textarea} from '@/components/ui/textarea';
 import {NativeSelect} from '@/components/ui/native-select';
 import {Button} from '@/components/ui/button';
 import {getCurrentCrmUser} from '@/lib/auth/current-user';
-import {hasAdministrativeAccess} from '@/lib/auth/routing';
+import {hasPermission,isSuperAdmin} from '@/lib/auth/routing';
 import {
   createChatChannel,
   deleteChatMessage,
@@ -98,7 +98,7 @@ export function FloatingChat(){
     void getCurrentCrmUser().then(async user=>{
       if(!alive)return;
       setMe(user);
-      setAdmin(hasAdministrativeAccess(user));
+      setAdmin(isSuperAdmin(user)||hasPermission(user,'chat.manage'));
       try{await loadLists()}catch{}
     }).catch(()=>{});
     const onOpen=()=>setOpen(true);

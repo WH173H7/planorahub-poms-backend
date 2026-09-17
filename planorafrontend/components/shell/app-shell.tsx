@@ -64,7 +64,10 @@ export function AppShell({
         }
         const admin = hasAdministrativeAccess(current);
 
-        if ((area === 'admin' && !admin) || (area === 'staff' && admin)) {
+        // Hybrid custom roles may legitimately use both company-wide and
+        // personal workspaces. Only block entry into an Admin-only shell when
+        // the account has no administrative capability at all.
+        if (area === 'admin' && !admin) {
           window.location.replace(routeForUser(current));
           return;
         }
@@ -119,7 +122,13 @@ export function AppShell({
   const navigation = navigationSource
     .map((section) => ({
       ...section,
-      items: section.items.filter((item) => !item.permission || user.permissions.includes(item.permission)),
+      items: section.items.filter((item) => {
+        if (item.superAdminOnly && user.role_code !== 'SUPER_ADMIN') return false;
+        if (item.permission && !user.permissions.includes(item.permission)) return false;
+        if (item.permissionsAll?.length && !item.permissionsAll.every((permission) => user.permissions.includes(permission))) return false;
+        if (item.permissionsAny?.length && !item.permissionsAny.some((permission) => user.permissions.includes(permission))) return false;
+        return true;
+      }),
     }))
     .filter((section) => section.items.length > 0);
 

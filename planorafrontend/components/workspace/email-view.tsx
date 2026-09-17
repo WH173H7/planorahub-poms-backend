@@ -13,7 +13,7 @@ import { NativeSelect } from '@/components/ui/native-select';
 import { Textarea } from '@/components/ui/textarea';
 import { Icon, type IconName } from '@/components/ui/icon';
 import { getCurrentCrmUser } from '@/lib/auth/current-user';
-import { hasAdministrativeAccess } from '@/lib/auth/routing';
+import { isSuperAdmin } from '@/lib/auth/routing';
 import {
   mailAttachment, mailCreateTemplate, mailDeleteDraft, mailDrafts, mailGrantAccess, mailReply, mailSaveDraft,
   mailSend, mailSummary, mailTemplates, mailThread, mailThreads, mailUpdateTemplate,
@@ -34,7 +34,7 @@ export function EmailView(){
   const [mailNavCollapsed,setMailNavCollapsed]=useState(false);
   const [loading,setLoading]=useState(true);const [error,setError]=useState<string|null>(null);
 
-  const load=useCallback(async(nextBox:Box=box,nextQuery=query)=>{try{setError(null);const user=await getCurrentCrmUser();const isAdmin=hasAdministrativeAccess(user);setAdmin(isAdmin);setCanSend(isAdmin||user.permissions.includes('mail.send'));const s=await mailSummary();setSummary(s);if(nextBox==='drafts'){setDrafts(await mailDrafts());setRows([])}else if(nextBox==='templates'){setTemplates(await mailTemplates());setRows([])}else{setRows(await mailThreads(nextBox,nextQuery))}if(detail&&nextBox!=='all'&&nextBox!=='inbox'&&nextBox!=='mine'&&nextBox!=='shared')setDetail(null)}catch(e){setError(e instanceof Error?e.message:'Unable to load PlanoraHub Mail.')}finally{setLoading(false)}},[box,query,detail]);
+  const load=useCallback(async(nextBox:Box=box,nextQuery=query)=>{try{setError(null);const user=await getCurrentCrmUser();const isAdmin=isSuperAdmin(user);setAdmin(isAdmin);setCanSend(user.permissions.includes('mail.send'));const s=await mailSummary();setSummary(s);if(nextBox==='drafts'){setDrafts(await mailDrafts());setRows([])}else if(nextBox==='templates'){setTemplates(await mailTemplates());setRows([])}else{setRows(await mailThreads(nextBox,nextQuery))}if(detail&&nextBox!=='all'&&nextBox!=='inbox'&&nextBox!=='mine'&&nextBox!=='shared')setDetail(null)}catch(e){setError(e instanceof Error?e.message:'Unable to load PlanoraHub Mail.')}finally{setLoading(false)}},[box,query,detail]);
   useEffect(()=>{void load();if(params.get('compose')==='1')setCompose(emptyCompose(null,params.get('to')??''))},[]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(()=>{const saved=window.localStorage.getItem('planorahub.mail.nav.collapsed');if(saved==='true'||saved==='false')setMailNavCollapsed(saved==='true')},[]);
   function toggleMailNav(){setMailNavCollapsed(current=>{const next=!current;window.localStorage.setItem('planorahub.mail.nav.collapsed',String(next));return next})}

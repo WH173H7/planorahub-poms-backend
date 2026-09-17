@@ -13,7 +13,7 @@ import { Modal } from '@/components/ui/modal';
 import { NativeSelect } from '@/components/ui/native-select';
 import { PageErrorState, PageLoadingState } from '@/components/ui/page-state';
 import { getCurrentCrmUser } from '@/lib/auth/current-user';
-import { hasAdministrativeAccess } from '@/lib/auth/routing';
+import { canUseCompanyActivities } from '@/lib/auth/routing';
 import { listFollowUps, updateActivity } from '@/lib/leads/api';
 import type { Activity } from '@/lib/leads/types';
 
@@ -37,7 +37,7 @@ export function FollowUpsView() {
     try {
       setError(null);
       const user = await getCurrentCrmUser();
-      const isStaff = !hasAdministrativeAccess(user);
+      const isStaff = !canUseCompanyActivities(user);
       setStaff(isStaff);
       setRows(await listFollowUps(isStaff));
     } catch (caught) {

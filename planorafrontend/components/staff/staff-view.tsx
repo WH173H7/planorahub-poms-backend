@@ -131,7 +131,7 @@ export function StaffView() {
   const activeStaff = rows.filter((staff) => staff.status === 'ACTIVE');
   const invitedStaff = rows.filter((staff) => staff.status === 'INVITED');
   const activeTeams = teams.filter((team) => team.is_active);
-  const activeRoles = roles.filter((role) => role.code !== 'SUPER_ADMIN' && role.is_active !== false && (role.code === 'MARKETING' || !role.is_system_role));
+  const activeRoles = roles.filter((role) => role.code !== 'SUPER_ADMIN' && role.is_active !== false && (['MARKETING', 'FINANCE'].includes(role.code) || !role.is_system_role));
 
 
   return (

@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Modal } from '@/components/ui/modal';
 import { Textarea } from '@/components/ui/textarea';
 import { getCurrentCrmUser } from '@/lib/auth/current-user';
-import { hasAdministrativeAccess } from '@/lib/auth/routing';
+import { canUseCompanyActivities } from '@/lib/auth/routing';
 import { getCalendar, type CalendarData } from '@/lib/delivery/api';
 import { createReminder, listReminders, createGoogleCalendarEvent } from '@/lib/workspace/ops-api';
 
@@ -31,7 +31,7 @@ export function CalendarView(){
 
   useEffect(()=>{ if(window.matchMedia('(max-width: 768px)').matches) setView('AGENDA'); },[]);
   async function load(isStaffArg?:boolean){const isStaff=isStaffArg??staff??false;const[calendar,reminderRows]=await Promise.all([getCalendar(isStaff),listReminders()]);setData(calendar);setReminders(reminderRows as Reminder[])}
-  useEffect(()=>{let active=true;getCurrentCrmUser().then(async user=>{const isStaff=!hasAdministrativeAccess(user);if(active)setStaff(isStaff);const[calendar,reminderRows]=await Promise.all([getCalendar(isStaff),listReminders()]);if(active){setData(calendar);setReminders(reminderRows as Reminder[])}}).catch(caught=>active&&setError(caught instanceof Error?caught.message:'Unable to load calendar.'));return()=>{active=false}},[]);
+  useEffect(()=>{let active=true;getCurrentCrmUser().then(async user=>{const isStaff=!canUseCompanyActivities(user);if(active)setStaff(isStaff);const[calendar,reminderRows]=await Promise.all([getCalendar(isStaff),listReminders()]);if(active){setData(calendar);setReminders(reminderRows as Reminder[])}}).catch(caught=>active&&setError(caught instanceof Error?caught.message:'Unable to load calendar.'));return()=>{active=false}},[]);
 
   const events=useMemo<Event[]>(()=>[
     ...data.tasks.map(item=>{const owner=person(item.assignee_first_name,item.assignee_last_name);return{id:item.id,kind:'task' as const,title:item.title,date:item.due_at,href:`/tasks/${item.id}`,owner,meta:staff?(item.organization_name||'Task deadline'):[owner,item.organization_name||'Task deadline'].filter(Boolean).join(' · ')}}),

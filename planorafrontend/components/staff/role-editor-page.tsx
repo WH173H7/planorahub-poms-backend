@@ -73,7 +73,8 @@ export function RoleEditorPage({ roleId }: { roleId?: string }) {
     return () => { active = false; };
   }, [isNew, roleId]);
 
-  const lockedName = role?.code === 'MARKETING';
+  const protectedRole = Boolean(role?.is_system_role);
+  const lockedName = protectedRole;
   const selectedSet = useMemo(() => new Set(selected), [selected]);
   const selectedModules = useMemo(
     () => new Set(permissions.filter((permission) => selectedSet.has(permission.id)).map((permission) => permission.module || 'general')).size,
@@ -84,7 +85,7 @@ export function RoleEditorPage({ roleId }: { roleId?: string }) {
   const replacementRoles = roleRows.filter((item) => item.id !== role?.id && item.code !== 'SUPER_ADMIN' && item.is_active !== false);
 
   async function toggleRoleStatus() {
-    if (!role || role.code === 'MARKETING') return;
+    if (!role || role.is_system_role) return;
     setSaving(true);
     setError(null);
     try {
@@ -120,6 +121,10 @@ export function RoleEditorPage({ roleId }: { roleId?: string }) {
     setError(null);
     try {
       if (role) {
+        if (role.is_system_role) {
+          router.push('/staff#roles');
+          return;
+        }
         await updateRole(role.id, {
           ...(lockedName ? {} : { name }),
           description,
@@ -146,7 +151,7 @@ export function RoleEditorPage({ roleId }: { roleId?: string }) {
       actions={
         <div className="role-page-header-actions">
           <Button variant="outline" onClick={() => router.push('/staff#roles')}>Cancel</Button>
-          <Button loading={saving} onClick={() => void save()} disabled={!name.trim() || loading}>Save role</Button>
+          {!protectedRole ? <Button loading={saving} onClick={() => void save()} disabled={!name.trim() || loading}>Save role</Button> : null}
         </div>
       }
     >
@@ -161,13 +166,13 @@ export function RoleEditorPage({ roleId }: { roleId?: string }) {
                     <h2>{isNew ? 'Name this access profile' : 'Role details'}</h2>
                     <p className="ui-help">Keep the role name clear enough that an admin can understand its purpose before opening the permission list.</p>
                   </div>
-                  {role?.code === 'MARKETING' ? <Badge tone="info">Built in</Badge> : role ? <Badge tone="neutral">Custom</Badge> : <Badge tone="success">New role</Badge>}
+                  {role?.is_system_role ? <Badge tone="info">Built in</Badge> : role ? <Badge tone="neutral">Custom</Badge> : <Badge tone="success">New role</Badge>}
                 </div>
                 <div className="role-page-identity-grid">
                   <Input label="Role name *" value={name} disabled={lockedName} onChange={(event) => setName(event.target.value)} required />
                   <Textarea label="Description" value={description} onChange={(event) => setDescription(event.target.value)} rows={4} />
                 </div>
-                {lockedName ? <p className="role-page-note">Marketing is PlanoraHub’s built-in staff role. Its name stays fixed, but its default permissions can still be reviewed here.</p> : null}
+                {protectedRole ? <p className="role-page-note">{role?.name} is a protected PlanoraHub system role. Its fixed access can be reviewed here but is not edited from the custom-role workflow.</p> : null}
               </div>
             </Card>
 
@@ -234,7 +239,7 @@ export function RoleEditorPage({ roleId }: { roleId?: string }) {
                 <PermissionChecklist
                   permissions={permissions}
                   selectedIds={selected}
-                  onToggle={(id, checked) => setSelected((current) => checked ? [...new Set([...current, id])] : current.filter((value) => value !== id))}
+                  onToggle={(id, checked) => { if (!protectedRole) setSelected((current) => checked ? [...new Set([...current, id])] : current.filter((value) => value !== id)); }}
                 />
               </div>
             </Card>
@@ -256,7 +261,7 @@ export function RoleEditorPage({ roleId }: { roleId?: string }) {
                   <strong>Keep access intentional.</strong>
                   <span>Choose the minimum permissions this role needs. You can customize a specific person later without changing everyone on the role.</span>
                 </div>
-                {!isNew && role?.code !== 'MARKETING' ? (
+                {!isNew && role && !role.is_system_role ? (
                   <div className="role-lifecycle-actions">
                     <Button variant="outline" onClick={() => void toggleRoleStatus()} disabled={saving}>{role?.is_active === false ? 'Reactivate role' : 'Suspend role'}</Button>
                     {!role?.is_system_role ? <Button variant="danger" onClick={() => setDeleteOpen(true)}>Delete role</Button> : null}
@@ -265,7 +270,7 @@ export function RoleEditorPage({ roleId }: { roleId?: string }) {
                 {error ? <p className="task-form-error">{error}</p> : null}
                 <div className="role-page-side-actions">
                   <Button variant="outline" onClick={() => router.push('/staff#roles')}>Cancel</Button>
-                  <Button loading={saving} onClick={() => void save()} disabled={!name.trim()}>Save role</Button>
+                  {!protectedRole ? <Button loading={saving} onClick={() => void save()} disabled={!name.trim()}>Save role</Button> : null}
                 </div>
               </div>
             </Card>

@@ -10,7 +10,7 @@ import { PageErrorState } from '@/components/ui/page-state';
 import { Skeleton } from '@/components/ui/skeleton';
 import { getDashboard, type DashboardData } from '@/lib/delivery/api';
 import { getCurrentCrmUser } from '@/lib/auth/current-user';
-import { hasAdministrativeAccess, routeForUser } from '@/lib/auth/routing';
+import { hasPermission, isSuperAdmin, routeForUser } from '@/lib/auth/routing';
 
 const fmt = (value: string) =>
   new Intl.DateTimeFormat(undefined, {
@@ -82,7 +82,7 @@ export function DashboardView() {
         // Never fire the protected Admin dashboard request for operational
         // staff. This also safely handles a stale /dashboard URL after the
         // mandatory first-login password change.
-        if (!hasAdministrativeAccess(current)) {
+        if (!isSuperAdmin(current) && !hasPermission(current, 'analytics.read.all')) {
           window.location.replace(routeForUser(current));
           return;
         }
