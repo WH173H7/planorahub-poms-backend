@@ -9,6 +9,8 @@ import { Card } from '@/components/ui/card';
 import { PageErrorState } from '@/components/ui/page-state';
 import { Skeleton } from '@/components/ui/skeleton';
 import { getDashboard, type DashboardData } from '@/lib/delivery/api';
+import { getCurrentCrmUser } from '@/lib/auth/current-user';
+import { hasAdministrativeAccess, routeForUser } from '@/lib/auth/routing';
 
 const fmt = (value: string) =>
   new Intl.DateTimeFormat(undefined, {
@@ -71,9 +73,29 @@ export function DashboardView() {
 
   useEffect(() => {
     let active = true;
-    getDashboard()
-      .then((response) => active && setData(response))
-      .catch((caught) => active && setError(caught instanceof Error ? caught.message : 'Unable to load dashboard.'));
+
+    async function load() {
+      try {
+        const current = await getCurrentCrmUser();
+        if (!active) return;
+
+        // Never fire the protected Admin dashboard request for operational
+        // staff. This also safely handles a stale /dashboard URL after the
+        // mandatory first-login password change.
+        if (!hasAdministrativeAccess(current)) {
+          window.location.replace(routeForUser(current));
+          return;
+        }
+
+        const response = await getDashboard();
+        if (active) setData(response);
+      } catch (caught) {
+        if (!active) return;
+        setError(caught instanceof Error ? caught.message : 'Unable to load dashboard.');
+      }
+    }
+
+    void load();
     return () => {
       active = false;
     };

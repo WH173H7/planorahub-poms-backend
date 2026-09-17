@@ -2,6 +2,8 @@
 
 import type { ReactNode } from 'react';
 import { Icon } from '@/components/ui/icon';
+import { getCurrentCrmUser } from '@/lib/auth/current-user';
+import { routeForUser } from '@/lib/auth/routing';
 
 export function PageHeader({
   title,
@@ -14,13 +16,18 @@ export function PageHeader({
   breadcrumb?: string;
   actions?: ReactNode;
 }) {
-  function goBack() {
+  async function goBack() {
     if (window.history.length > 1) {
       window.history.back();
       return;
     }
 
-    window.location.assign('/dashboard');
+    try {
+      const user = await getCurrentCrmUser();
+      window.location.assign(routeForUser(user));
+    } catch {
+      window.location.assign('/login');
+    }
   }
 
   return (
