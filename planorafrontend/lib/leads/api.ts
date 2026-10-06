@@ -27,7 +27,8 @@ export async function createContactMethod(contactId:string,input:CreateContactMe
 export async function updateContactMethod(contactId:string,methodId:string,input:CreateContactMethodInput):Promise<ContactMethod>{return(await apiFetch<ApiResponse<ContactMethod>>(`/admin/contacts/${contactId}/methods/${methodId}`,{method:'PATCH',body:JSON.stringify(input)})).data;}
 export async function deleteContactMethod(contactId:string,methodId:string):Promise<void>{await apiFetch(`/admin/contacts/${contactId}/methods/${methodId}`,{method:'DELETE'});}
 export async function getLeadPursuit(leadId:string):Promise<Pursuit|null>{return(await apiFetch<ApiResponse<Pursuit|null>>(`/admin/leads/${leadId}/pursuit`)).data;}
-export async function updatePursuitStep(leadId:string,stepId:string,input:{completed:boolean;notes:string|null}):Promise<Pursuit>{return(await apiFetch<ApiResponse<Pursuit>>(`/admin/leads/${leadId}/pursuit/steps/${stepId}`,{method:'PATCH',body:JSON.stringify(input)})).data;}
+export async function updatePursuitStep(leadId:string,stepId:string,input:{completed?:boolean;notes?:string|null;fieldValues?:Record<string,unknown>;comment?:string|null}):Promise<Pursuit>{return(await apiFetch<ApiResponse<Pursuit>>(`/admin/leads/${leadId}/pursuit/steps/${stepId}`,{method:'PATCH',body:JSON.stringify(input)})).data;}
+export async function submitPursuitStep(leadId:string,stepId:string,input:{fieldValues:Record<string,unknown>;notes?:string|null;comment?:string|null}):Promise<Pursuit>{return(await apiFetch<ApiResponse<Pursuit>>(`/admin/leads/${leadId}/pursuit/steps/${stepId}/submit`,{method:'POST',body:JSON.stringify(input)})).data;}
 export async function uploadPursuitEvidence(leadId:string,stepId:string,file:File):Promise<void>{const data=new FormData();data.set('file',file);await apiFetch(`/admin/leads/${leadId}/pursuit/steps/${stepId}/evidence`,{method:'POST',body:data});}
 export async function addPursuitComment(
   leadId: string,
@@ -101,8 +102,12 @@ export async function getOwnedLead(id:string):Promise<Lead>{return(await apiFetc
 export async function listOwnedLeadTasks(id:string):Promise<LeadTask[]>{return(await apiFetch<ApiResponse<LeadTask[]>>(`/staff/leads/${id}/tasks`)).data;}
 export async function listOwnedLeadContacts(leadId:string):Promise<Contact[]>{const contacts=(await apiFetch<ApiResponse<Omit<Contact,'methods'>[]>>(`/staff/leads/${leadId}/contacts`)).data;return Promise.all(contacts.map(async(contact)=>({...contact,methods:(await apiFetch<ApiResponse<ContactMethod[]>>(`/staff/leads/${leadId}/contacts/${contact.id}/methods`)).data})));}
 export async function getOwnedLeadPursuit(leadId:string):Promise<Pursuit|null>{return(await apiFetch<ApiResponse<Pursuit|null>>(`/staff/leads/${leadId}/pursuit`)).data;}
-export async function updateOwnedPursuitStep(leadId:string,stepId:string,input:{completed:boolean;notes:string|null}):Promise<Pursuit>{return(await apiFetch<ApiResponse<Pursuit>>(`/staff/leads/${leadId}/pursuit/steps/${stepId}`,{method:'PATCH',body:JSON.stringify(input)})).data;}
+export async function updateOwnedPursuitStep(leadId:string,stepId:string,input:{completed?:boolean;notes?:string|null;fieldValues?:Record<string,unknown>;comment?:string|null}):Promise<Pursuit>{return(await apiFetch<ApiResponse<Pursuit>>(`/staff/leads/${leadId}/pursuit/steps/${stepId}`,{method:'PATCH',body:JSON.stringify(input)})).data;}
 export async function uploadOwnedPursuitEvidence(leadId:string,stepId:string,file:File):Promise<void>{const data=new FormData();data.set('file',file);await apiFetch(`/staff/leads/${leadId}/pursuit/steps/${stepId}/evidence`,{method:'POST',body:data});}
+export async function submitOwnedPursuitStep(leadId:string,stepId:string,input:{fieldValues:Record<string,unknown>;notes?:string|null;comment?:string|null}):Promise<Pursuit>{return(await apiFetch<ApiResponse<Pursuit>>(`/staff/leads/${leadId}/pursuit/steps/${stepId}/submit`,{method:'POST',body:JSON.stringify(input)})).data;}
+export async function addOwnedPursuitComment(leadId:string,stepId:string,body:string):Promise<void>{await apiFetch(`/staff/leads/${leadId}/pursuit/steps/${stepId}/comments`,{method:'POST',body:JSON.stringify({body})});}
+export async function downloadOwnedPursuitEvidence(leadId:string,stepId:string,evidenceId:string):Promise<{id:string;fileName:string;signedUrl:string}>{return(await apiFetch<ApiResponse<{id:string;fileName:string;signedUrl:string}>>(`/staff/leads/${leadId}/pursuit/steps/${stepId}/evidence/${evidenceId}/download`)).data;}
+export async function downloadPursuitEvidence(leadId:string,stepId:string,evidenceId:string):Promise<{id:string;fileName:string;signedUrl:string}>{return(await apiFetch<ApiResponse<{id:string;fileName:string;signedUrl:string}>>(`/admin/leads/${leadId}/pursuit/steps/${stepId}/evidence/${evidenceId}/download`)).data;}
 export async function createOwnedPursuitCustomStep(
   leadId: string,
   input: {
@@ -182,6 +187,8 @@ export async function listAssignmentStaff() {
   ).data;
 }
 
+export async function createPursuitStageTask(leadId:string,stepId:string,input:{title:string;description?:string|null;assignedToId:string;priority?:string;dueAt?:string|null;blocksCompletion?:boolean}):Promise<Pursuit>{return(await apiFetch<ApiResponse<Pursuit>>(`/admin/leads/${leadId}/pursuit/steps/${stepId}/tasks`,{method:'POST',body:JSON.stringify(input)})).data;}
+
 export async function listPursuitWorkflows() {
   return (
     await apiFetch<
@@ -203,11 +210,7 @@ export async function bulkAssignLeads(
   ).data;
 }
 
-export type WorkflowEditorStepInput = {
-  title: string;
-  description?: string | null;
-  evidenceRequired: boolean;
-};
+export type WorkflowEditorStepInput = import('./types').PursuitWorkflowStepInput;
 
 export type WorkflowEditorInput = {
   name: string;

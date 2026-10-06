@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import {
-  type ChangeEvent,
   useCallback,
   useEffect,
   useMemo,
@@ -16,9 +15,7 @@ import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageErrorState, PageLoadingState } from "@/components/ui/page-state";
 import { Progress } from "@/components/ui/progress";
-import { Textarea } from "@/components/ui/textarea";
 import {
-  changeLeadStage,
   createLeadActivity,
   getOwnedLead,
   getOwnedLeadPursuit,
@@ -26,8 +23,6 @@ import {
   listOwnedLeadContacts,
   listOwnedLeadTasks,
   updateOwnedContactMethod,
-  updateOwnedPursuitStep,
-  uploadOwnedPursuitEvidence,
 } from "@/lib/leads/api";
 import {
   formatDate,
@@ -43,11 +38,9 @@ import type {
   PursuitStep,
 } from "@/lib/leads/types";
 import { ContactDialog, methodTypeLabel } from "./add-contact-dialog";
-import {
-  ChangeStageDialog,
-  LogActivityDialog,
-} from "./lead-operations-dialogs";
+import { LogActivityDialog } from "./lead-operations-dialogs";
 import { LeadPriorityPill, LeadStagePill } from "./lead-status";
+import { PursuitStageForm } from "./pursuit-stage-form";
 
 type Tab = "overview" | "research" | "contacts" | "pursuit" | "activity";
 
@@ -61,7 +54,7 @@ export function StaffLeadWorkspace({ leadId }: { leadId: string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [contact, setContact] = useState<Contact | null | undefined>(undefined);
-  const [dialog, setDialog] = useState<"stage" | "activity" | null>(null);
+  const [dialog, setDialog] = useState<"activity" | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const refresh = useCallback(async () => {
     setError(null);
@@ -140,13 +133,6 @@ export function StaffLeadWorkspace({ leadId }: { leadId: string }) {
               </p>
             </div>
             <div className="record-header-actions">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => setDialog("stage")}
-              >
-                Change Stage
-              </Button>
               <Button size="sm" onClick={() => setDialog("activity")}>
                 + Log Activity
               </Button>
@@ -212,6 +198,7 @@ export function StaffLeadWorkspace({ leadId }: { leadId: string }) {
             leadId={leadId}
             pursuit={pursuit}
             steps={research ? [research] : []}
+            contacts={contacts}
             onChanged={async (value) => {
               setPursuit(value);
               setLead(await getOwnedLead(leadId));
@@ -235,17 +222,6 @@ export function StaffLeadWorkspace({ leadId }: { leadId: string }) {
               });
               setContacts(await listOwnedLeadContacts(leadId));
             }}
-            contactFoundReady={
-              lead.stage === "RESEARCHING" &&
-              contacts.some((person) =>
-                person.methods.some(
-                  (method) =>
-                    method.verification_status === "VERIFIED" &&
-                    ["EMAIL", "PHONE", "LINKEDIN", "X", "INSTAGRAM", "FACEBOOK"].includes(method.type),
-                ),
-              )
-            }
-            onMoveToContactFound={() => setDialog("stage")}
           />
         ) : null}
         {tab === "pursuit" ? (
@@ -253,6 +229,7 @@ export function StaffLeadWorkspace({ leadId }: { leadId: string }) {
             leadId={leadId}
             pursuit={pursuit}
             steps={pursuit?.steps ?? []}
+            contacts={contacts}
             onChanged={async (value) => {
               setPursuit(value);
               setLead(await getOwnedLead(leadId));
@@ -276,18 +253,6 @@ export function StaffLeadWorkspace({ leadId }: { leadId: string }) {
             onSaved={async () => {
               setContacts(await listOwnedLeadContacts(leadId));
               setContact(undefined);
-            }}
-          />
-        ) : null}
-        {dialog === "stage" ? (
-          <ChangeStageDialog
-            stage={lead.stage}
-            onClose={() => setDialog(null)}
-            onConfirm={async (stage, reason, expectedRevenue) => {
-              await changeLeadStage(leadId, { stage, reason, expectedRevenue }, true);
-              await refresh();
-              setDialog(null);
-              setSuccess("Lead stage updated.");
             }}
           />
         ) : null}
@@ -317,7 +282,7 @@ function StaffOverview({ lead, tasks }: { lead: Lead; tasks: LeadTask[] }) {
           <div>
             <h2>Lead overview</h2>
             <p>
-              Keep organization research, pursuit progress, contacts and next actions together. Commercial value is introduced only when you recommend the Lead for Prospect Review.
+              Keep organization research, pursuit progress, contacts and next actions together. Pursuit context is captured inside the configured stages; opportunity value is pipeline context and remains separate from realised revenue.
             </p>
           </div>
         </header>
@@ -385,146 +350,60 @@ function StaffPursuit({
   leadId,
   pursuit,
   steps,
+  contacts,
   onChanged,
   empty,
 }: {
   leadId: string;
   pursuit: Pursuit | null;
   steps: PursuitStep[];
+  contacts: Contact[];
   onChanged: (value: Pursuit) => Promise<void>;
   empty: string;
 }) {
-  if (!pursuit || !steps.length)
+  if (!pursuit || !steps.length) {
     return (
       <Card>
         <EmptyState
           icon="workflow"
-          title="No available step"
+          title="No available pursuit stage"
           description={empty}
         />
       </Card>
     );
+  }
+
+  const currentStepId = pursuit.current_step_id ?? steps.find((step) => !step.completed)?.id ?? null;
+
   return (
     <div className="pursuit-list">
-      {steps.map((step) => (
-        <StaffStep
-          key={step.id}
-          leadId={leadId}
-          step={step}
-          onChanged={onChanged}
-        />
-      ))}
-    </div>
-  );
-}
-
-function StaffStep({
-  leadId,
-  step,
-  onChanged,
-}: {
-  leadId: string;
-  step: PursuitStep;
-  onChanged: (value: Pursuit) => Promise<void>;
-}) {
-  const [notes, setNotes] = useState(step.notes ?? "");
-  const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-  async function save(completed = step.completed) {
-    setSaving(true);
-    setMessage(null);
-    try {
-      await onChanged(
-        await updateOwnedPursuitStep(leadId, step.id, {
-          completed,
-          notes: notes || null,
-        }),
-      );
-      setMessage("Pursuit step updated.");
-    } catch (caught) {
-      setMessage(
-        caught instanceof Error ? caught.message : "Unable to update step.",
-      );
-    } finally {
-      setSaving(false);
-    }
-  }
-  async function upload(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    setSaving(true);
-    try {
-      await uploadOwnedPursuitEvidence(leadId, step.id, file);
-      const updated = await getOwnedLeadPursuit(leadId);
-      if (updated) await onChanged(updated);
-      setMessage("Evidence uploaded.");
-    } catch (caught) {
-      setMessage(
-        caught instanceof Error ? caught.message : "Evidence upload failed.",
-      );
-    } finally {
-      setSaving(false);
-      event.target.value = "";
-    }
-  }
-  return (
-    <Card className="workspace-card step-card">
-      <header>
-        <div>
-          <span className="eyebrow">Step {step.position}</span>
-          <h2>{step.title}</h2>
-          <p>{step.description || "No description provided."}</p>
-        </div>
-        <Badge tone={step.completed ? "success" : "neutral"}>
-          {step.completed ? "Complete" : "Incomplete"}
-        </Badge>
-      </header>
-      <Textarea
-        label="Working notes"
-        value={notes}
-        onChange={(event) => setNotes(event.target.value)}
-        rows={5}
-      />
-      <div className="evidence-block">
-        <strong>
-          Evidence {step.evidence_required ? "required" : "optional"}
-        </strong>
-        {step.evidence.length ? (
-          <ul>
-            {step.evidence.map((file) => (
-              <li key={file.id}>
-                {file.file_name} · {formatDate(file.created_at)}
-              </li>
-            ))}
-          </ul>
+      {steps.map((step) => {
+        const current = step.id === currentStepId;
+        const locked = !step.completed && !current;
+        return locked ? (
+          <Card key={step.id} className="workspace-card pursuit-locked-stage">
+            <header>
+              <div>
+                <span className="eyebrow">Stage {step.position}</span>
+                <h2>{step.title}</h2>
+                <p>{step.description || 'This stage becomes available after the previous stage is submitted.'}</p>
+              </div>
+              <Badge tone="neutral">Locked</Badge>
+            </header>
+            <p className="muted">Complete the current stage before working on this stage.</p>
+          </Card>
         ) : (
-          <p className="muted">No evidence uploaded.</p>
-        )}
-        <label className="ui-button ui-button--outline ui-button--sm evidence-upload">
-          Upload evidence
-          <input type="file" onChange={upload} disabled={saving} />
-        </label>
-      </div>
-      {message ? (
-        <Alert
-          tone={
-            message.includes("Unable") || message.includes("failed")
-              ? "error"
-              : "success"
-          }
-        >
-          {message}
-        </Alert>
-      ) : null}
-      <footer>
-        <Button variant="outline" onClick={() => void save()} loading={saving}>
-          Save notes
-        </Button>
-        <Button onClick={() => void save(!step.completed)} loading={saving}>
-          {step.completed ? "Reopen step" : "Mark complete"}
-        </Button>
-      </footer>
-    </Card>
+          <PursuitStageForm
+            key={step.id}
+            leadId={leadId}
+            step={step}
+            contacts={contacts}
+            current={current}
+            onChanged={onChanged}
+          />
+        );
+      })}
+    </div>
   );
 }
 
@@ -533,15 +412,11 @@ function StaffContacts({
   onAdd,
   onEdit,
   onVerify,
-  contactFoundReady,
-  onMoveToContactFound,
 }: {
   contacts: Contact[];
   onAdd: () => void;
   onEdit: (contact: Contact) => void;
   onVerify: (contact:Contact,method:Contact["methods"][number],status:"UNVERIFIED"|"VERIFIED"|"INVALID")=>Promise<void>;
-  contactFoundReady:boolean;
-  onMoveToContactFound:()=>void;
 }) {
   return (
     <Card className="workspace-card">
@@ -552,7 +427,6 @@ function StaffContacts({
         </div>
         <Button onClick={onAdd}>+ Add Contact</Button>
       </header>
-      {contactFoundReady ? <Alert tone="success">Contact information is ready. <Button size="sm" onClick={onMoveToContactFound}>Move Lead to Contact Found</Button></Alert> : null}
       {contacts.length ? (
         <div className="contact-list">
           {contacts.map((contact) => (

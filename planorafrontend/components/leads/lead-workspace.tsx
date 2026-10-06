@@ -18,12 +18,16 @@ import {
   addPursuitComment,
   assignLeadToTeam,
   createAdminRequiredPursuitStep,
+  createPursuitStageTask,
+  changeLeadStage,
+  downloadPursuitEvidence,
   deleteContact,
   deleteLead,
   getLead,
   getLeadPursuit,
   listAssignmentHistory,
   listLeadActivities,
+  listAssignmentStaff,
   listLeadContacts,
   markPursuitStepReviewed,
   publishLeadsToPool,
@@ -34,7 +38,7 @@ import {
 import { formatDate, organizationLocation, ownerName, priorityLabel, stageLabel } from '@/lib/leads/helpers';
 import type { Activity, AssignmentHistory, Contact, ContactMethod, Lead, Pursuit, PursuitStep } from '@/lib/leads/types';
 import { ContactDialog, methodTypeLabel } from './add-contact-dialog';
-import { ReassignLeadDialog } from './lead-operations-dialogs';
+import { ChangeStageDialog, ReassignLeadDialog } from './lead-operations-dialogs';
 import { listManagedTeams } from '@/lib/workspace/ops-api';
 import { NativeSelect } from '@/components/ui/native-select';
 import { LeadPriorityPill, LeadStagePill } from './lead-status';
@@ -67,7 +71,7 @@ export function LeadWorkspace({ leadId }: { leadId: string }) {
   const [tab, setTab] = useState<WorkspaceTab>('overview');
   const [contactOpen, setContactOpen] = useState(false);
   const [editingContact, setEditingContact] = useState<Contact | null>(null);
-  const [dialog, setDialog] = useState<'reassign' | null>(null);
+  const [dialog, setDialog] = useState<'reassign' | 'handoff' | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [reviewBusy, setReviewBusy] = useState(false);
   const [poolBusy, setPoolBusy] = useState(false);
@@ -126,6 +130,9 @@ export function LeadWorkspace({ leadId }: { leadId: string }) {
               <Button size="sm" variant="outline" disabled={reviewBusy} onClick={async()=>{const reason=window.prompt('Why is this Lead not ready for Prospect conversion? (optional)')??undefined;setReviewBusy(true);try{await rejectProspect(leadId,reason);await refreshWorkspace();setSuccess('Prospect recommendation returned for more Lead work.')}finally{setReviewBusy(false)}}}>Return for work</Button>
               <Button size="sm" loading={reviewBusy} onClick={async()=>{if(!window.confirm(`Approve ${lead.organization_name} as a Prospect?`))return;setReviewBusy(true);try{await approveProspect(leadId);window.location.href='/prospects'}finally{setReviewBusy(false)}}}>Approve Prospect</Button>
             </> : null}
+            {lead.stage === 'QUALIFIED' && Number(lead.pursuit_progress || 0) >= 100 ? (
+              <Button size="sm" variant="primary" onClick={() => setDialog('handoff')}>Submit for Prospect Review</Button>
+            ) : null}
 
             {unassigned && lead.stage === 'NEW' ? (
               lead.available_in_pool ? (
@@ -175,6 +182,16 @@ export function LeadWorkspace({ leadId }: { leadId: string }) {
         {tab === 'activity' && <ActivityView activities={activities} />}
 
         {contactOpen ? <ContactDialog key={editingContact?.id ?? 'new-contact'} open organizationId={lead.organization_id} contact={editingContact} onClose={() => { setContactOpen(false); setEditingContact(null); }} onSaved={async () => { setContacts(await listLeadContacts(lead.organization_id)); setContactOpen(false); setEditingContact(null); }} /> : null}
+        {dialog==='handoff' ? <ChangeStageDialog
+          stage={lead.stage}
+          onClose={() => setDialog(null)}
+          onConfirm={async (stage, reason, expectedRevenue) => {
+            await changeLeadStage(leadId, { stage, reason, expectedRevenue });
+            await refreshWorkspace();
+            setDialog(null);
+            setSuccess('Lead submitted for Prospect Review.');
+          }}
+        /> : null}
         {dialog==='reassign'?<ReassignLeadDialog currentOwnerId={lead.assigned_to_id} currentOwner={ownerName(lead)} onClose={()=>setDialog(null)} onConfirm={async(input)=>{await reassignLead(leadId,input);await refreshWorkspace();setDialog(null);setSuccess(lead.assigned_to_id?'Lead reassigned. Existing pursuit progress and history were preserved.':'Lead assigned. A pursuit workflow is now available to the owner.');}}/>:null}
         {deleteOpen?<DeleteLeadDialog leadName={lead.organization_name} onClose={()=>setDeleteOpen(false)} onDelete={async()=>{await deleteLead(leadId);router.push('/leads');router.refresh();}}/>:null}
       </div>
@@ -276,7 +293,7 @@ function Overview({ lead }: { lead: Lead }) {
   ];
   return (
     <Card className="workspace-card lead-overview-card">
-      <header><div><span className="eyebrow">Lead profile</span><h2>Organization & pursuit context</h2><p>Keep Lead work focused on research, contact quality, ownership, pursuit progress and next actions. Financial value starts at Prospect Review.</p></div></header>
+      <header><div><span className="eyebrow">Lead profile</span><h2>Organization & pursuit context</h2><p>Keep Lead work focused on research, contact quality, ownership, pursuit progress and next actions. Opportunity value belongs to the Pursuit; realised revenue remains separate.</p></div></header>
       <dl className="detail-grid">{fields.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value || '—'}</dd></div>)}</dl>
     </Card>
   );
@@ -294,6 +311,7 @@ function PursuitView({
   const [commentStep, setCommentStep] = useState<PursuitStep | null>(null);
   const [retakeStep, setRetakeStep] = useState<PursuitStep | null>(null);
   const [requiredAfter, setRequiredAfter] = useState<PursuitStep | null>(null);
+  const [taskStep, setTaskStep] = useState<PursuitStep | null>(null);
 
   if (!pursuit) {
     return (
@@ -365,6 +383,7 @@ function PursuitView({
                 onComment={() => setCommentStep(step)}
                 onRetake={() => setRetakeStep(step)}
                 onRequireStep={() => setRequiredAfter(step)}
+                onCreateTask={() => setTaskStep(step)}
                 onReviewed={async () => {
                   await onChanged(
                     await markPursuitStepReviewed(leadId, step.id),
@@ -410,6 +429,17 @@ function PursuitView({
         />
       ) : null}
 
+      {taskStep ? (
+        <PursuitTaskDialog
+          step={taskStep}
+          onClose={() => setTaskStep(null)}
+          onConfirm={async (input) => {
+            await onChanged(await createPursuitStageTask(leadId, taskStep.id, input));
+            setTaskStep(null);
+          }}
+        />
+      ) : null}
+
       {requiredAfter ? (
         <RequiredPursuitStepDialog
           after={requiredAfter}
@@ -435,6 +465,7 @@ function ReadOnlyPursuitStep({
   onComment,
   onRetake,
   onRequireStep,
+  onCreateTask,
   onReviewed,
 }: {
   step: PursuitStep;
@@ -442,6 +473,7 @@ function ReadOnlyPursuitStep({
   onComment: () => void;
   onRetake: () => void;
   onRequireStep: () => void;
+  onCreateTask: () => void;
   onReviewed: () => Promise<void>;
 }) {
   const completedBy = [
@@ -546,24 +578,45 @@ function ReadOnlyPursuitStep({
         )}
       </section>
 
-      <section className="evidence-block admin-evidence-block">
-        <strong>Evidence · required</strong>
+      {step.form_fields.length ? (
+        <section className="admin-step-response">
+          <span className="eyebrow">Structured stage response</span>
+          <div className="detail-grid">
+            {step.form_fields.map((field) => {
+              const value = step.field_values?.[field.key];
+              const rendered = Array.isArray(value)
+                ? value.join(', ')
+                : field.type === 'checkbox'
+                  ? value ? 'Yes' : 'No'
+                  : field.type === 'currency' && value !== undefined && value !== null && value !== ''
+                    ? new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN', maximumFractionDigits: 0 }).format(Number(value))
+                    : String(value ?? '—');
+              return <div key={field.key}><dt>{field.label}</dt><dd>{rendered}</dd></div>;
+            })}
+          </div>
+        </section>
+      ) : null}
 
+      <section className="evidence-block admin-evidence-block">
+        <strong>Evidence · {step.evidence_min_count > 0 ? `${step.evidence_min_count} required` : 'optional'}</strong>
         {step.evidence.length ? (
           <ul>
             {step.evidence.map((file) => (
               <li key={file.id}>
-                <span>{file.file_name}</span>
-                <small>
-                  {Math.ceil(file.file_size / 1024)} KB ·{" "}
-                  {formatDate(file.created_at)}
-                </small>
+                <button type="button" className="pursuit-file-link" onClick={async () => { const result = await downloadPursuitEvidence(leadId, step.id, file.id); window.open(result.signedUrl, '_blank', 'noopener,noreferrer'); }}>{file.file_name}</button>
+                <small>{Math.ceil(file.file_size / 1024)} KB · {formatDate(file.created_at)}</small>
               </li>
             ))}
           </ul>
-        ) : (
-          <p className="muted">No evidence has been uploaded for this step.</p>
-        )}
+        ) : <p className="muted">No evidence has been uploaded for this stage.</p>}
+      </section>
+
+      <section className="pursuit-task-gate">
+        <div className="pursuit-section-heading">
+          <div><strong>Stage tasks</strong><p>Operational tasks linked specifically to this stage.</p></div>
+          <Button size="sm" variant="outline" onClick={onCreateTask}>+ Create task</Button>
+        </div>
+        {step.tasks.length ? <ul>{step.tasks.map((task) => <li key={task.id}><div><strong>{task.title}</strong><small>{task.status.replaceAll('_',' ')} · {task.assignee_first_name ? `${task.assignee_first_name} ${task.assignee_last_name ?? ''}` : 'Unassigned'}{task.due_at ? ` · due ${formatDate(task.due_at)}` : ''}</small></div>{task.blocks_completion ? <Badge tone={task.status === 'COMPLETED' ? 'success' : 'warning'}>{task.status === 'COMPLETED' ? 'Complete' : 'Blocks stage'}</Badge> : null}</li>)}</ul> : <p className="muted">No stage-specific tasks yet.</p>}
       </section>
 
       {step.comments?.length ? (
@@ -727,6 +780,46 @@ function PursuitTextDialog({
             {danger ? "Request retake" : confirmLabel}
           </Button>
         </footer>
+      </Card>
+    </div>
+  );
+}
+
+function PursuitTaskDialog({
+  step,
+  onClose,
+  onConfirm,
+}: {
+  step: PursuitStep;
+  onClose: () => void;
+  onConfirm: (input: { title: string; description?: string | null; assignedToId: string; priority?: string; dueAt?: string | null; blocksCompletion?: boolean }) => Promise<void>;
+}) {
+  const [staff, setStaff] = useState<Array<{ id: string; first_name: string; last_name: string; email: string; status: string }>>([]);
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [assignedToId, setAssignedToId] = useState('');
+  const [priority, setPriority] = useState('MEDIUM');
+  const [dueAt, setDueAt] = useState('');
+  const [blocksCompletion, setBlocksCompletion] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => { void listAssignmentStaff().then((rows) => setStaff(rows.filter((row) => row.status === 'ACTIVE'))).catch((caught) => setError(caught instanceof Error ? caught.message : 'Unable to load staff.')); }, []);
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <Card className="pursuit-dialog" role="dialog" aria-modal="true">
+        <header><div><span className="eyebrow">Stage task</span><h2>Create task for {step.title}</h2><p>This task stays linked to the Pursuit stage and appears in the staff execution view.</p></div></header>
+        <label className="pursuit-field"><span>Task title</span><input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="e.g. Confirm decision maker availability" /></label>
+        <label className="pursuit-field"><span>Description</span><textarea rows={3} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="What must the staff member complete?" /></label>
+        <label className="pursuit-field"><span>Assign to</span><select value={assignedToId} onChange={(event) => setAssignedToId(event.target.value)}><option value="">Select staff member…</option>{staff.map((member) => <option key={member.id} value={member.id}>{member.first_name} {member.last_name} · {member.email}</option>)}</select></label>
+        <div className="pursuit-form-two-column">
+          <label className="pursuit-field"><span>Priority</span><select value={priority} onChange={(event) => setPriority(event.target.value)}><option>LOW</option><option>MEDIUM</option><option>HIGH</option><option>URGENT</option></select></label>
+          <label className="pursuit-field"><span>Due date</span><input type="datetime-local" value={dueAt} onChange={(event) => setDueAt(event.target.value)} /></label>
+        </div>
+        <label className="pursuit-checkbox"><input type="checkbox" checked={blocksCompletion} onChange={(event) => setBlocksCompletion(event.target.checked)} /><span>Block stage completion until this task is complete</span></label>
+        {error ? <Alert tone="error">{error}</Alert> : null}
+        <footer><Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button><Button loading={saving} onClick={async () => { if (!title.trim()) { setError('Task title is required.'); return; } if (!assignedToId) { setError('Select a staff member.'); return; } setSaving(true); setError(null); try { await onConfirm({ title: title.trim(), description: description.trim() || null, assignedToId, priority, dueAt: dueAt || null, blocksCompletion }); } catch (caught) { setError(caught instanceof Error ? caught.message : 'Unable to create task.'); setSaving(false); } }}>Create task</Button></footer>
       </Card>
     </div>
   );

@@ -89,7 +89,7 @@ export function WorkflowManagement() {
           <div>
             <span className="eyebrow">Pursuit operating system</span>
             <h2>Standardize how every Lead is worked.</h2>
-            <p>Workflows guide research, contact discovery, outreach, follow-ups and evidence. They do not capture money while the record is still being worked as a Lead.</p>
+            <p>Workflows define the commercial stages staff must execute, including structured forms, evidence, comments, tasks and follow-up gates. The Pursuit remains inside the existing Lead architecture.</p>
           </div>
           <div className="workflow-hero-stats">
             <div><span>Active workflows</span><strong>{active.length}</strong></div>
@@ -99,13 +99,13 @@ export function WorkflowManagement() {
         </Card>
 
         <Card className="workflow-final-gate">
-          <div className="workflow-final-gate-number">Final gate</div>
+          <div className="workflow-final-gate-number">Pursuit rules</div>
           <div>
-            <span className="eyebrow">Prospect handoff</span>
-            <h2>Expected revenue is captured only when staff recommends a Lead as a Prospect.</h2>
-            <p>At the final Lead stage, staff must enter Expected Revenue before submitting for Prospect Review. Admin and the involved staff receive in-app and email lifecycle notifications.</p>
+            <span className="eyebrow">Backend-enforced progression</span>
+            <h2>Stage forms are the gate — not a manual Change Stage button.</h2>
+            <p>Staff can save drafts, but the next stage unlocks only after required responses, evidence, blocking tasks and follow-up requirements pass backend validation. Admin retains review, retake and routing controls.</p>
           </div>
-          <Badge tone="warning">Lead → Prospect Review</Badge>
+          <Badge tone="warning">Lead → Pursuit → Prospect Review</Badge>
         </Card>
 
         {error ? (
@@ -150,7 +150,7 @@ export function WorkflowManagement() {
                     <li key={step.id}>
                       <span>{step.position}</span>
                       <div><strong>{step.title}</strong>{step.description ? <p>{step.description}</p> : null}</div>
-                      {step.evidence_required ? <small>Evidence required</small> : null}
+                      <small>{step.form_fields?.length ?? 0} fields · {step.evidence_min_count > 0 ? `${step.evidence_min_count} evidence` : 'evidence optional'}{step.task_required ? ' · task gate' : ''}{step.follow_up_required ? ' · follow-up' : ''}</small>
                     </li>
                   ))}
                 </ol>

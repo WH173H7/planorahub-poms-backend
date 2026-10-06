@@ -88,16 +88,57 @@ export type PursuitEvidence = {
   created_at: string;
 };
 
+export type PursuitFieldType =
+  | 'text'
+  | 'textarea'
+  | 'number'
+  | 'currency'
+  | 'date'
+  | 'datetime'
+  | 'select'
+  | 'multiselect'
+  | 'checkbox'
+  | 'url'
+  | 'email'
+  | 'phone'
+  | 'contact';
+
+export type PursuitField = {
+  key: string;
+  label: string;
+  type: PursuitFieldType;
+  required: boolean;
+  placeholder?: string | null;
+  helpText?: string | null;
+  options?: string[];
+  min?: number | null;
+  max?: number | null;
+};
+
 export type PursuitStepOrigin =
-  | "WORKFLOW"
-  | "STAFF_CUSTOM"
-  | "ADMIN_REQUIRED";
+  | 'WORKFLOW'
+  | 'STAFF_CUSTOM'
+  | 'ADMIN_REQUIRED';
 
 export type PursuitReviewStatus =
-  | "PENDING"
-  | "SUBMITTED"
-  | "APPROVED"
-  | "RETAKE_REQUIRED";
+  | 'PENDING'
+  | 'SUBMITTED'
+  | 'APPROVED'
+  | 'RETAKE_REQUIRED';
+
+export type PursuitStepTask = {
+  id: string;
+  task_id: string;
+  title: string;
+  status: string;
+  priority: string;
+  due_at: string | null;
+  completed_at: string | null;
+  assigned_to_id: string | null;
+  assignee_first_name: string | null;
+  assignee_last_name: string | null;
+  blocks_completion: boolean;
+};
 
 export type PursuitComment = {
   id: string;
@@ -129,45 +170,69 @@ export type PursuitSubmission = {
   evidence: PursuitSubmissionEvidence[];
 };
 
+export type PursuitTimelineEvent = {
+  id: string;
+  step_id: string | null;
+  actor_user_id: string | null;
+  event_type: string;
+  message: string | null;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+  actor_first_name: string | null;
+  actor_last_name: string | null;
+};
+
 export type PursuitStep = {
   id: string;
   title: string;
   description: string | null;
   position: number;
-
   evidence_required: boolean;
-
+  guidance: string | null;
+  form_fields: PursuitField[];
+  field_values: Record<string, unknown>;
+  comments_enabled: boolean;
+  evidence_min_count: number;
+  task_required: boolean;
+  require_tasks_complete: boolean;
+  follow_up_required: boolean;
+  transition_requirements: Record<string, unknown>;
   completed: boolean;
   completed_at: string | null;
   completed_by_first_name: string | null;
   completed_by_last_name: string | null;
-
   notes: string | null;
-
   step_origin: PursuitStepOrigin;
   review_status: PursuitReviewStatus;
-
   added_by_id: string | null;
   added_by_first_name: string | null;
   added_by_last_name: string | null;
-
   retake_reason: string | null;
   retake_requested_at: string | null;
   retake_requested_by_id: string | null;
   retake_requested_by_first_name: string | null;
   retake_requested_by_last_name: string | null;
-
   evidence: PursuitEvidence[];
   comments: PursuitComment[];
   submissions: PursuitSubmission[];
+  tasks: PursuitStepTask[];
 };
 
 export type Pursuit = {
   id: string;
   lead_id: string;
   created_at: string;
+  workflow_name: string | null;
+  workflow_description: string | null;
+  current_step_id: string | null;
+  current_step_position: number | null;
+  current_step_title: string | null;
+  research_step_id: string | null;
+  commercial_context: Record<string, unknown>;
   steps: PursuitStep[];
+  timeline: PursuitTimelineEvent[];
 };
+
 export type Activity = { id:string; title:string; activity_type:'CALL'|'MEETING'|'EMAIL'|'FOLLOW_UP'|'NOTE'|'OTHER'; status:'PLANNED'|'IN_PROGRESS'|'COMPLETED'|'CANCELLED'; description:string|null; outcome:string|null;organization_name:string|null;lead_id:string|null;lead_title:string|null; contact_first_name:string|null; contact_last_name:string|null; assignee_first_name:string|null; assignee_last_name:string|null;creator_first_name:string|null;creator_last_name:string|null; scheduled_at:string|null; completed_at:string|null; next_follow_up_at:string|null; created_at:string };
 export type CreateActivityInput = { title:string; activityType:Activity['activity_type']; status:Activity['status']; description?:string|null; contactId?:string|null; scheduledAt?:string|null; nextFollowUpAt?:string|null };
 export type AssignmentHistory = { id:string; previous_owner_id:string|null; assigned_to_id:string|null; reason:string|null; assigned_at:string; previous_owner_first_name:string|null; previous_owner_last_name:string|null; assigned_to_first_name:string|null; assigned_to_last_name:string|null; assigned_by_first_name:string|null; assigned_by_last_name:string|null };
@@ -195,6 +260,27 @@ export type PursuitWorkflowStepTemplate = {
   description: string | null;
   position: number;
   evidence_required: boolean;
+  guidance: string | null;
+  form_fields: PursuitField[];
+  comments_enabled: boolean;
+  evidence_min_count: number;
+  task_required: boolean;
+  require_tasks_complete: boolean;
+  follow_up_required: boolean;
+  transition_requirements: Record<string, unknown>;
+};
+
+export type PursuitWorkflowStepInput = {
+  title: string;
+  description?: string | null;
+  guidance?: string | null;
+  formFields?: PursuitField[];
+  commentsEnabled?: boolean;
+  evidenceMinCount?: number;
+  taskRequired?: boolean;
+  requireTasksComplete?: boolean;
+  followUpRequired?: boolean;
+  transitionRequirements?: Record<string, unknown>;
 };
 
 export type PursuitWorkflowTemplate = {
