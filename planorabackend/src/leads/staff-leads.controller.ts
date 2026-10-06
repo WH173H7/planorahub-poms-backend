@@ -75,26 +75,6 @@ export class StaffLeadsController {
     };
   }
 
-  @Post("leads/:id/stage")
-  async stage(
-    @Param("id") id: string,
-    @Body() body: { stage: LeadStage; reason?: string | null; expectedRevenue?: number | null },
-    @Req() request: AuthenticatedRequest,
-    @Headers("user-agent") userAgent?: string,
-  ) {
-    return {
-      success: true,
-      data: await this.leads.changeStage(
-        id,
-        body.stage,
-        this.context(request, userAgent),
-        request.user!.id,
-        body.reason,
-        body.expectedRevenue,
-      ),
-    };
-  }
-
   @Get("leads/:id/pursuit")
   async getPursuit(
     @Param("id") id: string,
@@ -108,7 +88,7 @@ export class StaffLeadsController {
   async step(
     @Param("id") id: string,
     @Param("stepId") stepId: string,
-    @Body() body: { completed: boolean; notes?: string | null },
+    @Body() body: { completed?: boolean; notes?: string | null; fieldValues?: Record<string, unknown>; comment?: string | null },
     @Req() request: AuthenticatedRequest,
     @Headers("user-agent") userAgent?: string,
   ) {
@@ -116,6 +96,26 @@ export class StaffLeadsController {
     return {
       success: true,
       data: await this.pursuit.updateStep(
+        id,
+        stepId,
+        body,
+        this.context(request, userAgent),
+      ),
+    };
+  }
+
+  @Post("leads/:id/pursuit/steps/:stepId/submit")
+  async submitStep(
+    @Param("id") id: string,
+    @Param("stepId") stepId: string,
+    @Body() body: { fieldValues?: Record<string, unknown>; notes?: string | null; comment?: string | null },
+    @Req() request: AuthenticatedRequest,
+    @Headers("user-agent") userAgent?: string,
+  ) {
+    await this.leads.getOwned(id, request.user!.id);
+    return {
+      success: true,
+      data: await this.pursuit.submitStep(
         id,
         stepId,
         body,
@@ -149,6 +149,32 @@ export class StaffLeadsController {
         file,
         this.context(request, userAgent),
       ),
+    };
+  }
+
+  @Get("leads/:id/pursuit/steps/:stepId/evidence/:evidenceId/download")
+  async downloadEvidence(
+    @Param("id") id: string,
+    @Param("stepId") stepId: string,
+    @Param("evidenceId") evidenceId: string,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    await this.leads.getOwned(id, request.user!.id);
+    return { success: true, data: await this.pursuit.downloadEvidence(id, stepId, evidenceId) };
+  }
+
+  @Post("leads/:id/pursuit/steps/:stepId/comments")
+  async comment(
+    @Param("id") id: string,
+    @Param("stepId") stepId: string,
+    @Body() body: { body: string },
+    @Req() request: AuthenticatedRequest,
+    @Headers("user-agent") userAgent?: string,
+  ) {
+    await this.leads.getOwned(id, request.user!.id);
+    return {
+      success: true,
+      data: await this.pursuit.comment(id, stepId, body, this.context(request, userAgent)),
     };
   }
 

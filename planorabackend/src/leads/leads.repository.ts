@@ -511,9 +511,23 @@ export class LeadsRepository {
       const batch = batchResult.rows[0];
 
       const workflowId = input.workflowId ?? (await client.query(`SELECT id FROM lead_pursuit_workflows WHERE is_default=true AND is_active=true LIMIT 1`)).rows[0]?.id ?? null;
-      let snapshotSteps = input.workflowSteps ?? [];
-      if (!snapshotSteps.length && workflowId) {
-        snapshotSteps = (await client.query(`SELECT title,description,evidence_required FROM lead_pursuit_workflow_steps WHERE workflow_id=$1 ORDER BY position`,[workflowId])).rows.map((r:any)=>({title:r.title,description:r.description,evidenceRequired:r.evidence_required}));
+      let snapshotSteps = [] as any[];
+      if (workflowId) {
+        snapshotSteps = (await client.query(`SELECT * FROM lead_pursuit_workflow_steps WHERE workflow_id=$1 ORDER BY position`,[workflowId])).rows.map((r:any)=>({
+          title:r.title,
+          description:r.description,
+          evidenceRequired:r.evidence_required,
+          guidance:r.guidance,
+          formFields:r.form_fields ?? [],
+          commentsEnabled:r.comments_enabled,
+          evidenceMinCount:r.evidence_min_count,
+          taskRequired:r.task_required,
+          requireTasksComplete:r.require_tasks_complete,
+          followUpRequired:r.follow_up_required,
+          transitionRequirements:r.transition_requirements ?? {},
+        }));
+      } else {
+        snapshotSteps = input.workflowSteps ?? [];
       }
       await client.query(`UPDATE lead_assignment_batches SET workflow_id=$2 WHERE id=$1`,[batch.id,workflowId]);
 
@@ -551,7 +565,23 @@ export class LeadsRepository {
         const instance=(await client.query(`INSERT INTO lead_pursuit_instances(lead_id,batch_id,source_workflow_id) VALUES($1,$2,$3) RETURNING id`,[lead.id,batch.id,workflowId])).rows[0];
         for(let si=0;si<snapshotSteps.length;si++){
           const st=snapshotSteps[si];
-          await client.query(`INSERT INTO lead_pursuit_instance_steps(instance_id,title,description,position,evidence_required) VALUES($1,$2,$3,$4,$5)`,[instance.id,st.title,st.description??null,si+1,!!st.evidenceRequired]);
+          await client.query(`INSERT INTO lead_pursuit_instance_steps(
+            instance_id,title,description,position,evidence_required,guidance,form_fields,comments_enabled,evidence_min_count,task_required,require_tasks_complete,follow_up_required,transition_requirements
+          ) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13::jsonb)`,[
+            instance.id,
+            st.title,
+            st.description??null,
+            si+1,
+            !!st.evidenceRequired,
+            st.guidance??null,
+            JSON.stringify(st.formFields ?? []),
+            st.commentsEnabled !== false,
+            Number(st.evidenceMinCount ?? (st.evidenceRequired ? 1 : 0)),
+            Boolean(st.taskRequired),
+            Boolean(st.requireTasksComplete),
+            Boolean(st.followUpRequired),
+            JSON.stringify(st.transitionRequirements ?? {}),
+          ]);
         }
 
         await client.query(`
@@ -594,10 +624,26 @@ export class LeadsRepository {
     const workflow=(await client.query(`SELECT id FROM lead_pursuit_workflows WHERE is_default=true AND is_active=true LIMIT 1`)).rows[0];
     if(!workflow?.id)return null;
     const instance=(await client.query(`INSERT INTO lead_pursuit_instances(lead_id,batch_id,source_workflow_id) VALUES($1,NULL,$2) RETURNING id`,[leadId,workflow.id])).rows[0];
-    const steps=(await client.query(`SELECT title,description,evidence_required FROM lead_pursuit_workflow_steps WHERE workflow_id=$1 ORDER BY position`,[workflow.id])).rows;
+    const steps=(await client.query(`SELECT * FROM lead_pursuit_workflow_steps WHERE workflow_id=$1 ORDER BY position`,[workflow.id])).rows;
     for(let i=0;i<steps.length;i+=1){
       const step=steps[i];
-      await client.query(`INSERT INTO lead_pursuit_instance_steps(instance_id,title,description,position,evidence_required) VALUES($1,$2,$3,$4,$5)`,[instance.id,step.title,step.description??null,i+1,!!step.evidence_required]);
+      await client.query(`INSERT INTO lead_pursuit_instance_steps(
+        instance_id,title,description,position,evidence_required,guidance,form_fields,comments_enabled,evidence_min_count,task_required,require_tasks_complete,follow_up_required,transition_requirements
+      ) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13::jsonb)`,[
+        instance.id,
+        step.title,
+        step.description??null,
+        i+1,
+        !!step.evidence_required,
+        step.guidance??null,
+        JSON.stringify(step.form_fields ?? []),
+        step.comments_enabled !== false,
+        Number(step.evidence_min_count ?? (step.evidence_required ? 1 : 0)),
+        Boolean(step.task_required),
+        Boolean(step.require_tasks_complete),
+        Boolean(step.follow_up_required),
+        JSON.stringify(step.transition_requirements ?? {}),
+      ]);
     }
     return instance.id;
   }

@@ -18,21 +18,16 @@ import {
   AuthGuard,
   type AuthenticatedRequest,
 } from '../auth/auth.guard.js';
-import { PermissionGuard } from '../permissions/permission.guard.js';
 import { RequirePermission } from '../auth/require-permission.decorator.js';
+import { PermissionGuard } from '../permissions/permission.guard.js';
 import { PursuitWorkflowsService } from './pursuit-workflows.service.js';
 
 @Controller('admin')
 @UseGuards(AuthGuard, PermissionGuard)
 export class PursuitWorkflowsController {
-  constructor(
-    private service: PursuitWorkflowsService,
-  ) {}
+  constructor(private readonly service: PursuitWorkflowsService) {}
 
-  private context(
-    request: AuthenticatedRequest,
-    userAgent?: string,
-  ) {
+  private context(request: AuthenticatedRequest, userAgent?: string) {
     return {
       actorUserId: request.user!.id,
       ipAddress: request.ip,
@@ -40,17 +35,10 @@ export class PursuitWorkflowsController {
     };
   }
 
-  // ============================================================
-  // WORKFLOW TEMPLATES
-  // ============================================================
-
   @Get('pursuit-workflows')
   @RequirePermission('leads.read.all')
   async list() {
-    return {
-      success: true,
-      data: await this.service.list(),
-    };
+    return { success: true, data: await this.service.list() };
   }
 
   @Post('pursuit-workflows')
@@ -60,13 +48,7 @@ export class PursuitWorkflowsController {
     @Req() request: AuthenticatedRequest,
     @Headers('user-agent') userAgent?: string,
   ) {
-    return {
-      success: true,
-      data: await this.service.create(
-        body,
-        this.context(request, userAgent),
-      ),
-    };
+    return { success: true, data: await this.service.create(body, this.context(request, userAgent)) };
   }
 
   @Patch('pursuit-workflows/:id')
@@ -77,14 +59,7 @@ export class PursuitWorkflowsController {
     @Req() request: AuthenticatedRequest,
     @Headers('user-agent') userAgent?: string,
   ) {
-    return {
-      success: true,
-      data: await this.service.update(
-        id,
-        body,
-        this.context(request, userAgent),
-      ),
-    };
+    return { success: true, data: await this.service.update(id, body, this.context(request, userAgent)) };
   }
 
   @Post('pursuit-workflows/:id/default')
@@ -94,13 +69,7 @@ export class PursuitWorkflowsController {
     @Req() request: AuthenticatedRequest,
     @Headers('user-agent') userAgent?: string,
   ) {
-    return {
-      success: true,
-      data: await this.service.setDefault(
-        id,
-        this.context(request, userAgent),
-      ),
-    };
+    return { success: true, data: await this.service.setDefault(id, this.context(request, userAgent)) };
   }
 
   @Delete('pursuit-workflows/:id')
@@ -110,33 +79,16 @@ export class PursuitWorkflowsController {
     @Req() request: AuthenticatedRequest,
     @Headers('user-agent') userAgent?: string,
   ) {
-    return {
-      success: true,
-      data: await this.service.remove(
-        id,
-        this.context(request, userAgent),
-      ),
-    };
+    return { success: true, data: await this.service.remove(id, this.context(request, userAgent)) };
   }
-
-  // ============================================================
-  // ADMIN PURSUIT MONITORING / REVIEW
-  // ============================================================
 
   @Get('leads/:leadId/pursuit')
   @RequirePermission('leads.read.all')
-  async pursuit(
-    @Param('leadId') leadId: string,
-  ) {
-    return {
-      success: true,
-      data: await this.service.getLeadPursuit(
-        leadId,
-      ),
-    };
+  async pursuit(@Param('leadId') leadId: string) {
+    return { success: true, data: await this.service.getLeadPursuit(leadId) };
   }
 
-  // Kept for compatibility/emergency administration.
+  // Administrative compatibility endpoint. Staff progression uses submit below.
   @Patch('leads/:leadId/pursuit/steps/:stepId')
   @RequirePermission('leads.update.all')
   async step(
@@ -146,29 +98,24 @@ export class PursuitWorkflowsController {
     @Req() request: AuthenticatedRequest,
     @Headers('user-agent') userAgent?: string,
   ) {
-    return {
-      success: true,
-      data: await this.service.updateStep(
-        leadId,
-        stepId,
-        body,
-        this.context(request, userAgent),
-      ),
-    };
+    return { success: true, data: await this.service.updateStep(leadId, stepId, body, this.context(request, userAgent)) };
   }
 
-  @Post(
-    'leads/:leadId/pursuit/steps/:stepId/evidence',
-  )
+  @Post('leads/:leadId/pursuit/steps/:stepId/submit')
   @RequirePermission('leads.update.all')
-  @UseInterceptors(
-    FileInterceptor('file', {
-      limits: {
-        fileSize: 10 * 1024 * 1024,
-        files: 1,
-      },
-    }),
-  )
+  async submit(
+    @Param('leadId') leadId: string,
+    @Param('stepId') stepId: string,
+    @Body() body: any,
+    @Req() request: AuthenticatedRequest,
+    @Headers('user-agent') userAgent?: string,
+  ) {
+    return { success: true, data: await this.service.submitStep(leadId, stepId, body, this.context(request, userAgent)) };
+  }
+
+  @Post('leads/:leadId/pursuit/steps/:stepId/evidence')
+  @RequirePermission('leads.update.all')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024, files: 1 } }))
   async evidence(
     @Param('leadId') leadId: string,
     @Param('stepId') stepId: string,
@@ -176,20 +123,20 @@ export class PursuitWorkflowsController {
     @Req() request: AuthenticatedRequest,
     @Headers('user-agent') userAgent?: string,
   ) {
-    return {
-      success: true,
-      data: await this.service.evidence(
-        leadId,
-        stepId,
-        file,
-        this.context(request, userAgent),
-      ),
-    };
+    return { success: true, data: await this.service.evidence(leadId, stepId, file, this.context(request, userAgent)) };
   }
 
-  @Post(
-    'leads/:leadId/pursuit/steps/:stepId/comments',
-  )
+  @Get('leads/:leadId/pursuit/steps/:stepId/evidence/:evidenceId/download')
+  @RequirePermission('leads.read.all')
+  async downloadEvidence(
+    @Param('leadId') leadId: string,
+    @Param('stepId') stepId: string,
+    @Param('evidenceId') evidenceId: string,
+  ) {
+    return { success: true, data: await this.service.downloadEvidence(leadId, stepId, evidenceId) };
+  }
+
+  @Post('leads/:leadId/pursuit/steps/:stepId/comments')
   @RequirePermission('leads.update.all')
   async comment(
     @Param('leadId') leadId: string,
@@ -198,20 +145,10 @@ export class PursuitWorkflowsController {
     @Req() request: AuthenticatedRequest,
     @Headers('user-agent') userAgent?: string,
   ) {
-    return {
-      success: true,
-      data: await this.service.comment(
-        leadId,
-        stepId,
-        body,
-        this.context(request, userAgent),
-      ),
-    };
+    return { success: true, data: await this.service.comment(leadId, stepId, body, this.context(request, userAgent)) };
   }
 
-  @Post(
-    'leads/:leadId/pursuit/steps/:stepId/review',
-  )
+  @Post('leads/:leadId/pursuit/steps/:stepId/review')
   @RequirePermission('leads.update.all')
   async review(
     @Param('leadId') leadId: string,
@@ -219,19 +156,10 @@ export class PursuitWorkflowsController {
     @Req() request: AuthenticatedRequest,
     @Headers('user-agent') userAgent?: string,
   ) {
-    return {
-      success: true,
-      data: await this.service.markReviewed(
-        leadId,
-        stepId,
-        this.context(request, userAgent),
-      ),
-    };
+    return { success: true, data: await this.service.markReviewed(leadId, stepId, this.context(request, userAgent)) };
   }
 
-  @Post(
-    'leads/:leadId/pursuit/steps/:stepId/retake',
-  )
+  @Post('leads/:leadId/pursuit/steps/:stepId/retake')
   @RequirePermission('leads.update.all')
   async retake(
     @Param('leadId') leadId: string,
@@ -240,15 +168,19 @@ export class PursuitWorkflowsController {
     @Req() request: AuthenticatedRequest,
     @Headers('user-agent') userAgent?: string,
   ) {
-    return {
-      success: true,
-      data: await this.service.requestRetake(
-        leadId,
-        stepId,
-        body,
-        this.context(request, userAgent),
-      ),
-    };
+    return { success: true, data: await this.service.requestRetake(leadId, stepId, body, this.context(request, userAgent)) };
+  }
+
+  @Post('leads/:leadId/pursuit/steps/:stepId/tasks')
+  @RequirePermission('tasks.create')
+  async createStageTask(
+    @Param('leadId') leadId: string,
+    @Param('stepId') stepId: string,
+    @Body() body: any,
+    @Req() request: AuthenticatedRequest,
+    @Headers('user-agent') userAgent?: string,
+  ) {
+    return { success: true, data: await this.service.createStageTask(leadId, stepId, body, this.context(request, userAgent)) };
   }
 
   @Post('leads/:leadId/pursuit/custom-steps')
@@ -259,14 +191,6 @@ export class PursuitWorkflowsController {
     @Req() request: AuthenticatedRequest,
     @Headers('user-agent') userAgent?: string,
   ) {
-    return {
-      success: true,
-      data: await this.service.addCustomStep(
-        leadId,
-        body,
-        'ADMIN_REQUIRED',
-        this.context(request, userAgent),
-      ),
-    };
+    return { success: true, data: await this.service.addCustomStep(leadId, body, 'ADMIN_REQUIRED', this.context(request, userAgent)) };
   }
 }
