@@ -378,6 +378,7 @@ function PursuitView({
               </div>
 
               <ReadOnlyPursuitStep
+                leadId={leadId}
                 step={step}
                 current={current}
                 onComment={() => setCommentStep(step)}
@@ -460,6 +461,7 @@ function PursuitView({
 }
 
 function ReadOnlyPursuitStep({
+  leadId,
   step,
   current,
   onComment,
@@ -468,6 +470,7 @@ function ReadOnlyPursuitStep({
   onCreateTask,
   onReviewed,
 }: {
+  leadId: string;
   step: PursuitStep;
   current: boolean;
   onComment: () => void;
