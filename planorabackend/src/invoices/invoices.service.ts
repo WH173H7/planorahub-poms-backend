@@ -408,8 +408,14 @@ export class InvoicesService {
     this.ensurePaymentInstructions(settings);
     const recipient = this.resolveRecipient(body?.recipientEmail, invoice.bill_to_email);
     if (recipient !== invoice.bill_to_email) await this.db.query(`UPDATE invoices SET bill_to_email=$2,updated_at=NOW() WHERE id=$1`, [id, recipient]);
-    const pdf = this.buildPdf(settings, { ...invoice, bill_to_email: recipient });
-    const overdue = invoice.is_overdue ? `This invoice was due ${this.prettyDate(invoice.due_date)}.` : `Payment is due ${this.prettyDate(invoice.due_date)}.`;
+    // Freeze the contractual due date before sending the reminder. A reminder is a
+    // delivery event only; it must never recalculate or mutate the invoice payment
+    // deadline. This also prevents any date serialization/timezone drift in the
+    // reminder path from becoming the invoice's effective due date.
+    const dueDate = this.dateOnly(invoice.due_date);
+    const reminderInvoice = { ...invoice, due_date: dueDate, bill_to_email: recipient };
+    const pdf = this.buildPdf(settings, reminderInvoice);
+    const overdue = invoice.is_overdue ? `This invoice was due ${this.prettyDate(dueDate)}.` : `Payment is due ${this.prettyDate(dueDate)}.`;
     const delivery = await this.mail.sendWorkspaceMail({
       to: [recipient],
       subject: `Payment reminder — invoice ${invoice.invoice_number}`,
@@ -423,7 +429,7 @@ export class InvoicesService {
       this.db.query(`UPDATE invoices SET last_reminder_at=NOW(),updated_at=NOW() WHERE id=$1`, [id]),
       this.db.query(`INSERT INTO invoice_delivery_events(invoice_id,event_type,recipient_email,provider_id,delivery_status,message,created_by_id) VALUES($1,'REMINDER_SENT',$2,$3,$4,$5,$6)`, [id, recipient, delivery.id || null, delivery.status, delivery.message, ctx.actorUserId]),
     ]);
-    await this.audit.log({ actorUserId: ctx.actorUserId, action: 'INVOICE_REMINDER_SENT', module: 'finance', entityType: 'invoice', entityId: id, newValues: { invoiceNumber: invoice.invoice_number, recipient, balance: Number(invoice.balance_due) }, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent });
+    await this.audit.log({ actorUserId: ctx.actorUserId, action: 'INVOICE_REMINDER_SENT', module: 'finance', entityType: 'invoice', entityId: id, newValues: { invoiceNumber: invoice.invoice_number, recipient, balance: Number(invoice.balance_due), dueDate }, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent });
     return this.get(id);
   }
 
