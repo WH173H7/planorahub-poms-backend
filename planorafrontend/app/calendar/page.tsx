@@ -1,1 +1,5 @@
-import {CalendarView} from '@/components/delivery/calendar-view';export default function Page(){return <CalendarView/>}
+import { CalendarViewP304 } from '@/components/delivery/calendar-view-p30-4';
+
+export default function Page() {
+  return <CalendarViewP304 />;
+}

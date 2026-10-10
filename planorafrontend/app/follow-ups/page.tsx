@@ -1,1 +1,5 @@
-import {FollowUpsView} from '@/components/operations/follow-ups-view';export default function FollowUpsPage(){return <FollowUpsView/>;}
+import { FollowUpsViewP304 } from '@/components/operations/follow-ups-view-p30-4';
+
+export default function FollowUpsPage() {
+  return <FollowUpsViewP304 />;
+}
