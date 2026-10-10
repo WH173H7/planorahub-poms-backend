@@ -196,7 +196,7 @@ export function InvoiceEditor({ invoiceId }: { invoiceId?: string }) {
         {loading ? <Card className="invoice-editor-loading">Preparing invoice editor…</Card> : (
           <>
             <Card className="invoice-business-card">
-              <div className="invoice-business-logo"><img src="/planorahub.png" alt="PlanoraHub" /></div>
+              <div className="invoice-business-logo"><img src="/planorahub-letter-logo.png" alt="PlanoraHub" /></div>
               <div className="invoice-business-copy"><span className="eyebrow">Invoice from</span><h2>{settings?.organization_name || 'PlanoraHub'}</h2><p>{settings?.address || 'Add business address in invoice settings.'}</p><small>{[settings?.email, settings?.phone].filter(Boolean).join(' · ')}</small></div>
               <div className="invoice-business-actions"><span className="invoice-draft-number">{loaded?.invoice_number || 'Invoice number assigned on save'}</span>{canManage ? <Button size="sm" variant="outline" onClick={() => setSettingsOpen(true)}>Invoice settings</Button> : null}</div>
             </Card>

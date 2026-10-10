@@ -130,7 +130,7 @@ export function InvoiceDetail({ invoiceId }: { invoiceId: string }) {
 
             <div className="invoice-detail-grid">
               <Card className="invoice-preview-card">
-                <div className="invoice-preview-brand"><img src="/planorahub.png" alt="PlanoraHub" /><div><span>INVOICE</span><strong>{invoice.invoice_number}</strong></div></div>
+                <div className="invoice-preview-brand"><img src="/planorahub-letter-logo.png" alt="PlanoraHub" /><div><span>INVOICE</span><strong>{invoice.invoice_number}</strong></div></div>
                 <div className="invoice-preview-meta">
                   <div><small>Bill to</small><strong>{invoice.bill_to_name || invoice.organization_name}</strong><span>{invoice.bill_to_contact_name || ''}</span><span>{invoice.bill_to_address || ''}</span></div>
                   <div><dl><dt>Invoice date</dt><dd>{dateLabel(invoice.issue_date)}</dd><dt>Payment due</dt><dd>{dateLabel(invoice.due_date)}</dd><dt>P.O./S.O.</dt><dd>{invoice.po_number || '—'}</dd></dl></div>
